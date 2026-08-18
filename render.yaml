@@ -1,0 +1,25 @@
+# Render blueprint. Push this repo, then New > Blueprint on render.com.
+services:
+  - type: web
+    name: terminal-ai
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # Set these in the Render dashboard, not here - never commit keys.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: TWELVEDATA_KEY
+        sync: false
+      - key: FINNHUB_KEY
+        sync: false
+      # Lock the API to your hosted frontend once you know its URL.
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      # No MT5 in a Linux container - fail loudly rather than serve fake prices.
+      - key: ALLOW_SYNTHETIC
+        value: "0"
+      - key: CHEAP_CHAIN
+        value: gemini

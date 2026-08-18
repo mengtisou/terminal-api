@@ -1,0 +1,2186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0d1117">
+<title>Terminal</title>
+<script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#141a22; --line:#232c38;
+    --text:#e6edf3; --muted:#8b98a8; --dim:#5a6472;
+    --up:#26a69a; --down:#ef5350;
+    --accent:#4a9eff; --warn:#e3a008; --danger:#f85149;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+  header{display:flex;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+  .sym{font-size:17px;font-weight:600;letter-spacing:.3px}
+  .price{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+  .badge{font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid var(--line);color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .badge.live{color:var(--up);border-color:var(--up)}
+  .badge.closed{color:var(--warn);border-color:var(--warn)}
+  .badge.fake{color:var(--danger);border-color:var(--danger)}
+  .spacer{flex:1}
+
+  .tfbar button.more{min-width:26px;font-size:13px;letter-spacing:1px}
+  .tfpop{position:absolute;top:46px;left:50%;transform:translateX(-50%);z-index:60;
+         background:var(--panel);border:1px solid var(--line);border-radius:9px;
+         padding:10px;display:none;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+  .tfpop.open{display:block}
+  .tfpop h6{font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);
+            font-weight:600;margin:8px 0 5px}
+  .tfpop h6:first-child{margin-top:0}
+  .tfgrid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+  .tfgrid button{padding:6px 4px;font-size:11.5px;min-width:38px}
+  .tfgrid button.on{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  .tfbar{display:flex;gap:2px;background:#151c26;border:1px solid var(--line);border-radius:7px;padding:2px}
+  .tfbar button{border:0;background:transparent;padding:5px 10px;font-size:12px;color:var(--muted);border-radius:5px;min-width:34px}
+  .tfbar button:hover{color:var(--text);background:#1c242f}
+  .tfbar button.on{background:var(--accent);color:#04121f;font-weight:600}
+
+  select,button{background:#1c242f;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 11px;font-size:13px;font-family:inherit;cursor:pointer}
+  button:hover:not(:disabled),select:hover{border-color:var(--dim)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.on{border-color:var(--up);color:var(--up)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+
+  main{flex:1;display:flex;min-height:0}
+  #chartWrap{flex:1;position:relative;min-width:0}
+  #chart{position:absolute;inset:0}
+  #indBtn{position:relative}
+  .indpop{position:absolute;top:46px;right:120px;z-index:60;background:var(--panel);
+          border:1px solid var(--line);border-radius:10px;padding:14px;width:270px;
+          box-shadow:0 10px 34px rgba(0,0,0,.6);display:none;max-height:70vh;overflow-y:auto}
+  .indpop.open{display:block}
+  .indpop h5{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);
+             font-weight:600;margin:12px 0 6px}
+  .indpop h5:first-child{margin-top:0}
+  .ind{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:6px;
+       cursor:pointer;font-size:12.5px;border:1px solid transparent}
+  .ind:hover{background:#1a222c}
+  .ind.on{border-color:var(--accent);background:rgba(74,158,255,.09)}
+  .ind .box{width:13px;height:13px;border:1.5px solid var(--dim);border-radius:3px;
+            flex-shrink:0;position:relative}
+  .ind.on .box{border-color:var(--accent);background:var(--accent)}
+  .ind.on .box:after{content:"";position:absolute;left:3.5px;top:.5px;width:3px;height:7px;
+                     border:solid #04121f;border-width:0 2px 2px 0;transform:rotate(45deg)}
+  .subpane{border-top:1px solid var(--line);position:relative}
+  .subpane .plabel{position:absolute;top:4px;left:8px;z-index:3;font-size:10px;
+                   color:var(--muted);pointer-events:none}
+  .panel{position:absolute;z-index:5;background:rgba(13,17,23,.88);
+         border:1px solid rgba(48,54,61,.9);border-radius:7px;overflow:hidden;
+         font-size:10.5px;pointer-events:none;backdrop-filter:blur(3px);display:none}
+  .panel.on{display:block}
+  #dashPanel{top:10px;right:10px;min-width:212px}
+  #btcPanel{bottom:10px;right:10px;min-width:186px;border-color:rgba(247,147,26,.4)}
+  .panel .hd{display:flex;justify-content:space-between;gap:12px;padding:5px 9px;
+             background:rgba(28,33,40,.9);font-weight:600;color:var(--muted)}
+  #btcPanel .hd{background:rgba(28,16,8,.9);color:#f7931a}
+  .panel .rw{display:flex;justify-content:space-between;gap:12px;padding:3px 9px;
+             border-top:1px solid rgba(48,54,61,.5)}
+  .panel .rw span:first-child{color:var(--dim)}
+  .panel .rw span:last-child{font-variant-numeric:tabular-nums;text-align:right}
+  .panel .sec{padding:3px 9px;background:rgba(28,33,40,.6);color:var(--dim);
+              font-size:9px;text-transform:uppercase;letter-spacing:.6px}
+  #evt{position:absolute;top:10px;right:14px;z-index:4;display:none;align-items:center;gap:7px;
+       background:rgba(58,44,12,.92);border:1px solid var(--warn);color:#f5c451;
+       padding:5px 11px;border-radius:6px;font-size:11.5px;pointer-events:none}
+  #evt.on{display:flex}
+  #evt.soon{background:rgba(61,20,24,.92);border-color:var(--danger);color:#f5827f}
+  #evt b{font-weight:600}
+  #legend{position:absolute;top:10px;left:12px;z-index:3;font-size:11px;color:var(--muted);pointer-events:none;line-height:1.9;font-variant-numeric:tabular-nums}
+  #legend b{color:var(--text);font-weight:600}
+  .sw{display:inline-block;width:9px;height:2px;vertical-align:middle;margin-right:5px}
+
+  aside{width:370px;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+  .tabs{display:flex;border-bottom:1px solid var(--line);flex-shrink:0;
+        position:sticky;top:0;z-index:20;background:var(--panel)}
+  .tab{flex:1;padding:11px;text-align:center;font-size:13px;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent}
+  .tab.on{color:var(--text);border-bottom-color:var(--accent)}
+  .pane{flex:1;overflow-y:auto;padding:14px;display:none}
+  .pane.on{display:block}
+
+  /* Stay reachable however far the conversation scrolls. */
+  .presets{display:grid;grid-template-columns:1fr 1fr;gap:7px;
+           position:sticky;top:0;z-index:15;background:var(--panel);
+           padding:12px 0 10px;margin:-14px 0 4px;
+           border-bottom:1px solid var(--line);
+           box-shadow:0 6px 12px -8px rgba(0,0,0,.85)}
+  .presets button{font-size:12px;padding:8px 6px}
+  #log{padding-top:10px}
+
+  #log{font-size:13px;line-height:1.65}
+  .msg{margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .msg:last-child{border-bottom:0}
+  .who{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px}
+  .msg .body{white-space:pre-wrap;word-wrap:break-word}
+  .tool{font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0f151d;border-left:2px solid var(--accent);padding:5px 9px;margin:6px 0;border-radius:0 4px 4px 0}
+
+  .composer{border-top:1px solid var(--line);padding:11px;display:flex;gap:7px;flex-shrink:0}
+  .composer input{flex:1;background:#0f151d;border:1px solid var(--line);border-radius:6px;padding:8px 11px;color:var(--text);font-size:13px;font-family:inherit}
+  .composer input:focus{outline:none;border-color:var(--accent)}
+
+  .card{background:#0f151d;border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:12px}
+  .card.long{border-left:3px solid var(--up)}
+  .card.short{border-left:3px solid var(--down)}
+  .card.none{border-left:3px solid var(--dim)}
+  .bias{font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+  .bias.long{color:var(--up)} .bias.short{color:var(--down)} .bias.none{color:var(--muted)}
+  .row{display:flex;justify-content:space-between;padding:5px 0;font-size:12px;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .row span:first-child{color:var(--muted)}
+  .row span:last-child{font-variant-numeric:tabular-nums;font-weight:500}
+  .why{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6}
+  .disc{font-size:10px;color:var(--dim);margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+  .empty{color:var(--dim);font-size:13px;text-align:center;padding:36px 12px}
+  .evrow{display:grid;grid-template-columns:78px 1fr 1fr 1fr;gap:6px;padding:7px 0;border-bottom:1px solid var(--line);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .evrow.head{color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px;border-bottom-color:var(--dim)}
+  .evrow .up{color:var(--up)} .evrow .down{color:var(--down)}
+  .statbox{background:#0f151d;border:1px solid var(--line);border-radius:7px;padding:12px;margin-bottom:12px}
+  .statbox .big{font-size:13px;line-height:1.55;color:var(--text)}
+  .statgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .stat{background:#131a23;border-radius:5px;padding:8px 10px}
+  .stat span{display:block;font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  .stat b{font-size:15px;font-variant-numeric:tabular-nums}
+  .casc{background:#0f151d;border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:12px}
+  .stg{display:flex;align-items:center;gap:9px;padding:6px 0;font-size:12px}
+  .stg .n{width:19px;height:19px;border-radius:50%;display:flex;align-items:center;
+          justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;
+          background:#1c242f;color:var(--dim)}
+  .stg.done .n{background:var(--up);color:#04121f}
+  .stg.block .n{background:var(--warn);color:#04121f}
+  .stg.wait .n{background:#1c242f;color:var(--dim)}
+  .stg small{margin-left:auto;color:var(--dim);font-size:11px;text-align:right}
+  .verdict{font-size:12px;line-height:1.55;color:var(--muted);margin-top:9px;
+           padding-top:9px;border-top:1px solid var(--line)}
+  .smcrow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;
+          border-bottom:1px solid var(--line);font-size:12px}
+  .smcrow:last-child{border-bottom:0}
+  .smcrow span:first-child{color:var(--muted);flex-shrink:0}
+  .smcrow span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  .smchead{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);
+           font-weight:600;margin:14px 0 4px}
+  .smchead:first-child{margin-top:0}
+  .zone{background:#0f151d;border:1px solid var(--line);border-left-width:3px;
+        border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:11.5px}
+  .zone.dem{border-left-color:var(--up)} .zone.sup{border-left-color:var(--down)}
+  .news-item{padding:12px 0;border-bottom:1px solid var(--line)}
+  .news-item:last-child{border-bottom:0}
+  .news-head{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+  .imp{font-size:9px;font-weight:600;letter-spacing:.7px;padding:2px 6px;border-radius:3px;text-transform:uppercase}
+  .imp.high{background:#3d1418;color:#f5827f}
+  .imp.medium{background:#3a2c0c;color:#f0b84a}
+  .imp.low{background:#1c242f;color:var(--muted)}
+  .news-title{font-size:13px;line-height:1.45;font-weight:500;margin-bottom:7px}
+  .news-title a{color:var(--text);text-decoration:none}
+  .news-title a:hover{color:var(--accent)}
+  .tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
+  .tag{font-size:10px;padding:2px 6px;border-radius:3px;background:#131a23;color:var(--dim)}
+  .tag b{font-weight:600;margin-left:3px}
+  .tag .bull{color:var(--up)} .tag .bear{color:var(--down)} .tag .neut{color:var(--dim)}
+  .take{font-size:11.5px;color:var(--warn);line-height:1.5;display:flex;gap:6px}
+  .meta{font-size:10px;color:var(--dim);margin-top:6px}
+  .senti{display:flex;align-items:center;gap:9px;padding:9px 11px;background:#0f151d;border:1px solid var(--line);border-radius:7px;margin-bottom:12px;font-size:12px}
+  .senti b{font-size:13px}
+  .pop{position:absolute;top:46px;right:14px;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;width:330px;box-shadow:0 10px 34px rgba(0,0,0,.6);display:none}
+  .pop.open{display:block}
+  .pop h4{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:600;margin:14px 0 7px}
+  .pop h4:first-child{margin-top:0}
+  .opt{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;margin-bottom:6px;cursor:pointer;font-size:13px}
+  .opt:hover{border-color:var(--dim)}
+  .opt.sel{border-color:var(--accent);background:rgba(74,158,255,.09)}
+  .opt.off{opacity:.4;cursor:not-allowed}
+  .opt .dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0}
+  .opt.rdy .dot{background:var(--up)}
+  .opt small{margin-left:auto;color:var(--dim);font-size:11px}
+  #provBadge{cursor:pointer}
+  /* ---------- mobile ----------
+     Under 900px the side panel becomes a bottom sheet: the chart keeps the
+     screen, and the panel is dragged up when needed. Two columns on a phone
+     leaves neither usable. */
+  @media (max-width: 900px){
+    body{height:100dvh}
+
+    header{gap:8px;padding:8px 10px 6px;position:relative}
+    .sym{font-size:15px}
+    .price{font-size:17px}
+    header .badge{font-size:9.5px;padding:2px 6px}
+    /* Secondary badges eat the whole row on a phone - keep source and session */
+    #ago, #tzTag, #provBadge{display:none}
+    #symSel{order:-1;flex:0 0 auto;font-size:12px;padding:5px 8px}
+    .tfbar{order:10;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .tfbar::-webkit-scrollbar{display:none}
+    .tfbar button{min-width:40px;padding:7px 10px;font-size:12.5px}
+    #auto, #reload{font-size:11.5px;padding:5px 8px}
+    #indBtn{font-size:11.5px;padding:5px 8px}
+
+    main{flex-direction:column}
+    #chartWrap{flex:1;min-height:44dvh}
+    #panes .subpane{height:70px}
+
+    /* Bottom sheet */
+    aside{
+      position:fixed;left:0;right:0;bottom:0;width:auto;
+      height:62dvh;border-left:0;border-top:1px solid var(--line);
+      border-radius:16px 16px 0 0;z-index:80;
+      transform:translateY(calc(100% - 46px));
+      transition:transform .25s cubic-bezier(.4,0,.2,1);
+      box-shadow:0 -8px 30px rgba(0,0,0,.55)}
+    aside.open{transform:translateY(0)}
+    aside:before{
+      content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);
+      width:38px;height:4px;border-radius:2px;background:var(--dim);opacity:.6}
+    .tabs{padding-top:14px}
+    .tab{padding:13px 4px;font-size:12.5px}
+    .pane{padding:12px 14px 90px}
+    .composer{position:sticky;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+    .composer input{font-size:16px}   /* 16px stops iOS zooming on focus */
+
+    /* Panels overlap the chart badly on a small screen */
+    #dashPanel{top:auto;bottom:8px;left:8px;right:8px;min-width:0;
+               max-height:34dvh;overflow-y:auto;font-size:10px}
+    #btcPanel{display:none}
+    #evt{left:8px;right:8px;top:6px;font-size:10.5px;justify-content:center}
+    #legend{font-size:9.5px;top:32px}
+
+    .indpop{right:8px;left:8px;width:auto;top:auto;bottom:8px;max-height:70dvh}
+    .pop{right:8px;left:8px;width:auto;max-height:70dvh;overflow-y:auto}
+    .tfpop{left:8px;right:8px;transform:none}
+    .presets button{padding:11px 6px}
+  }
+
+  @media (max-width: 420px){
+    .sym{font-size:13px}
+    .price{font-size:15px}
+    .tab{font-size:11.5px;padding:12px 2px}
+  }
+
+  .warn{background:#2a1f0a;border:1px solid var(--warn);color:#f5c451;padding:9px 12px;border-radius:6px;font-size:12px;margin-bottom:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="sym" id="sym">XAUUSD</span>
+  <span class="price" id="px">—</span>
+  <span class="badge" id="src">loading</span>
+  <span class="badge" id="sess"></span>
+  <span class="badge" id="ago" title="time since last fetch"></span>
+  <span class="badge" id="tzTag" title="display timezone"></span>
+  <span class="badge" id="provBadge" title="click to change AI provider">ai: —</span>
+  <span class="spacer"></span>
+  <select id="symSel">
+    <option>XAUUSD</option><option>BTCUSDT</option><option>ETHUSDT</option>
+    <option>EURUSD</option><option>GBPUSD</option><option>USOIL</option>
+  </select>
+  <div class="tfbar" id="tfBar"></div>
+  <div class="tfpop" id="tfPop"></div>
+  <button id="auto" class="on">Auto ⏵</button>
+  <button id="reload">Refresh</button>
+  <button id="indBtn" title="Indicators">Indicators</button>
+  <button id="cog" title="AI provider settings">⚙</button>
+</header>
+
+<div class="indpop" id="indPop"></div>
+
+<div class="pop" id="pop">
+  <h4>Reasoning &amp; chat</h4>
+  <div id="provList"></div>
+  <h4>Data source · <span id="dpSym" style="color:var(--muted)"></span></h4>
+  <div id="dpList"></div>
+  <div style="font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5">
+    Click to make it first. The rest stay behind it as fallback.
+  </div>
+
+  <h4>Refresh speed</h4>
+  <select id="pollSel" style="width:100%">
+    <option value="1">1 second — fastest</option>
+    <option value="3">3 seconds</option>
+    <option value="5">5 seconds</option>
+    <option value="10">10 seconds</option>
+    <option value="15" selected>15 seconds — default</option>
+    <option value="30">30 seconds</option>
+    <option value="60">1 minute — most economical</option>
+  </select>
+  <select id="ttlSel" style="width:100%;margin-top:7px">
+    <option value="budget">Auto — spread quota over the day</option>
+    <option value="">Default per timeframe</option>
+    <option value="10">Server refetch every 10s</option>
+    <option value="30">Server refetch every 30s</option>
+    <option value="60">Server refetch every 60s</option>
+    <option value="120">Server refetch every 2 min</option>
+  </select>
+  <div id="quotaNote" style="font-size:11px;color:var(--dim);margin-top:7px;line-height:1.5"></div>
+
+  <h4>Timezone</h4>
+  <select id="tzSel" style="width:100%">
+    <option value="Asia/Phnom_Penh">Phnom Penh (GMT+7)</option>
+    <option value="UTC">UTC</option>
+    <option value="America/New_York">New York (market hours)</option>
+    <option value="Europe/London">London</option>
+    <option value="Asia/Tokyo">Tokyo</option>
+    <option value="Asia/Bangkok">Bangkok (GMT+7)</option>
+  </select>
+  <div style="font-size:11px;color:var(--dim);margin-top:6px">
+    Applies to the chart axis, news timestamps and event dates.
+  </div>
+
+  <h4>Reviewer</h4>
+  <div class="opt" id="reviewOpt">
+    <span class="dot"></span>Second model critiques<small id="reviewState">off</small>
+  </div>
+  <div style="font-size:11px;color:var(--dim);margin-top:7px;line-height:1.5">
+    A different provider reviews each signal and can reject it, widen the stop,
+    or cut confidence. Adds one call per signal.
+  </div>
+
+  <h4>Council mode</h4>
+  <div class="opt" id="councilOpt">
+    <span class="dot"></span>All providers vote<small id="councilState">off</small>
+  </div>
+  <div style="font-size:11px;color:var(--dim);margin-top:7px;line-height:1.5">
+    Every provider with a key analyses the setup. They must agree on direction
+    or it becomes no-trade. Costs more per signal.
+  </div>
+  <button id="resetProv" style="width:100%;margin-top:14px;font-size:12px">Reset to .env</button>
+</div>
+
+<main>
+  <div id="chartWrap" style="display:flex;flex-direction:column">
+    <div id="chartCol" style="flex:1;position:relative;min-height:0">
+      <div id="chart" style="position:absolute;inset:0"></div>
+      <canvas id="zoneCanvas" style="position:absolute;inset:0;pointer-events:none;z-index:2"></canvas>
+      <div id="legend"></div>
+      <div id="evt"></div>
+      <div class="panel" id="dashPanel"></div>
+      <div class="panel" id="btcPanel"></div>
+    </div>
+    <div id="panes"></div>
+  </div>
+
+  <aside>
+    <div class="sheetgrip" id="sheetGrip" style="display:none"></div>
+    <div class="tabs">
+      <div class="tab on" data-p="chat">Chat</div>
+      <div class="tab" data-p="signal">Signal</div>
+      <div class="tab" data-p="news">News</div>
+      <div class="tab" data-p="events">Events</div>
+      <div class="tab" data-p="smc">SMC</div>
+    </div>
+
+    <div class="pane on" id="p-chat">
+      <div class="presets">
+        <button data-preset="analyze">Analyze chart</button>
+        <button data-preset="best_setup">Best setup</button>
+        <button data-preset="outlook">Outlook</button>
+        <button data-preset="risk_check">Risk check</button>
+      </div>
+      <div id="log"><div class="empty">Ask about the chart, or tap a button above.</div></div>
+    </div>
+
+    <div class="pane" id="p-signal">
+      <button class="primary" id="gen" style="width:100%;margin-bottom:12px">Generate signal</button>
+      <div id="sigOut"><div class="empty">No signal yet.</div></div>
+    </div>
+
+    <div class="pane" id="p-news">
+      <div style="position:sticky;top:0;z-index:15;background:var(--panel);
+                  padding:12px 0 10px;margin:-14px 0 4px;border-bottom:1px solid var(--line)">
+        <div style="display:flex;gap:7px;margin-bottom:7px">
+          <button id="refreshNews" style="flex:1;font-size:12px">Refresh feed</button>
+          <button id="pullNews" style="flex:1;font-size:12px">Pull latest news</button>
+          <button id="clearNews" style="flex:0 0 auto;font-size:12px" title="Clear cached headlines">✕</button>
+        </div>
+        <div class="tfbar" id="impBar" style="width:100%">
+          <button data-imp="all" class="on" style="flex:1">All</button>
+          <button data-imp="scored" style="flex:1">Scored</button>
+          <button data-imp="medium" style="flex:1">Medium+</button>
+          <button data-imp="high" style="flex:1">High only</button>
+        </div>
+      </div>
+      <div id="newsOut"><div class="empty">Tap "Pull latest news" to fetch and tag headlines.</div></div>
+    </div>
+
+    <div class="pane" id="p-events">
+      <div style="display:flex;gap:7px;position:sticky;top:0;z-index:15;
+                  background:var(--panel);padding:12px 0 10px;margin:-14px 0 4px;
+                  border-bottom:1px solid var(--line)">
+        <select id="evKind" style="flex:1">
+          <option value="fomc">FOMC</option>
+          <option value="nfp">Non-farm payrolls</option>
+          <option value="cpi">US CPI</option>
+        </select>
+        <button id="evGo" style="flex:0 0 auto">Analyse</button>
+      </div>
+      <div id="evOut"><div class="empty">Pick an event to see how this symbol reacted historically.</div></div>
+    </div>
+
+    <div class="pane" id="p-smc">
+      <div style="display:flex;gap:7px;position:sticky;top:0;z-index:15;
+                  background:var(--panel);padding:12px 0 10px;margin:-14px 0 4px;
+                  border-bottom:1px solid var(--line)">
+        <button id="smcGo" style="flex:1;font-size:12px">Refresh SMC</button>
+        <label class="opt" style="flex:0 0 auto;margin:0;padding:6px 9px" id="smcDraw">
+          <span class="box"></span>Draw</label>
+      </div>
+      <div id="cascadeBox"></div>
+      <div id="smcOut"><div class="empty">Tap Refresh to run the SMC read.</div></div>
+    </div>
+
+    <div class="composer">
+      <input id="inp" placeholder="Ask about this chart…" autocomplete="off">
+      <button id="send">Send</button>
+    </div>
+  </aside>
+</main>
+
+<script>
+// Backend location, resolved in this order:
+//   1. ?api=https://your-backend.example.com   (shareable link)
+//   2. whatever was saved from a previous visit
+//   3. same origin, when the page is served BY the backend
+//   4. localhost, for a page opened from disk or GitHub Pages
+//
+// Kept configurable because the page is static and can live anywhere - GitHub
+// Pages, a CDN, or the backend itself - while the API stays wherever you run it.
+const API = (() => {
+  const qs = new URLSearchParams(location.search).get("api");
+  if (qs) {
+    try { localStorage.setItem("apiBase", qs.replace(/\/$/, "")); } catch {}
+    return qs.replace(/\/$/, "");
+  }
+  try {
+    const saved = localStorage.getItem("apiBase");
+    if (saved) return saved;
+  } catch {}
+  if (location.protocol.startsWith("http") && location.port === "8000") {
+    return location.origin;
+  }
+  return "http://localhost:8000";
+})();
+
+// Access key for a hosted backend. Passed once as ?key=... then remembered,
+// so it is not sitting in the URL every time.
+const ACCESS_KEY = (() => {
+  const qs = new URLSearchParams(location.search).get("key");
+  if (qs) {
+    try { localStorage.setItem("accessKey", qs); } catch {}
+    // Strip it from the address bar so it is not shoulder-surfed or shared.
+    history.replaceState({}, "", location.pathname + location.hash);
+    return qs;
+  }
+  try { return localStorage.getItem("accessKey") || ""; } catch { return ""; }
+})();
+
+// Attach the key to every request without touching each call site.
+const _fetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const url = typeof input === "string" ? input : input.url;
+  if (ACCESS_KEY && url && url.startsWith(API)) {
+    init.headers = {...(init.headers || {}), "X-Access-Key": ACCESS_KEY};
+  }
+  return _fetch(input, init);
+};
+
+// ---------- session clock ----------
+// FX and metals: Sunday 17:00 ET to Friday 17:00 ET. Crypto never closes.
+async function checkBackend(){
+  try{
+    // Free hosting tiers sleep when idle and can take ~50s to wake, so allow
+    // for that before declaring the backend unreachable.
+    const r = await fetch(`${API}/health`, {signal: AbortSignal.timeout(60000)});
+    if(!r.ok) throw new Error("bad status");
+    const h = await r.json();
+    if(h.auth_required && !ACCESS_KEY){
+      document.body.insertAdjacentHTML("afterbegin", `
+        <div style="position:fixed;inset:0;z-index:999;background:var(--bg);
+                    display:flex;align-items:center;justify-content:center;padding:24px">
+          <div style="max-width:420px;text-align:center">
+            <div style="font-size:17px;font-weight:600;margin-bottom:10px">Access key required</div>
+            <div style="color:var(--muted);font-size:13px;line-height:1.6">
+              This backend is protected. Add your key to the URL once:<br><br>
+              <code style="color:var(--accent)">?key=YOUR-ACCESS-KEY</code>
+            </div>
+          </div>
+        </div>`);
+      return false;
+    }
+    return true;
+  }catch{
+    document.body.insertAdjacentHTML("afterbegin", `
+      <div style="position:fixed;inset:0;z-index:999;background:var(--bg);
+                  display:flex;align-items:center;justify-content:center;padding:24px">
+        <div style="max-width:460px;text-align:center">
+          <div style="font-size:17px;font-weight:600;margin-bottom:10px">
+            Cannot reach the backend</div>
+          <div style="color:var(--muted);font-size:13px;line-height:1.6">
+            Tried <code style="color:var(--accent)">${API}</code><br><br>
+            If you are running it locally, start the server:<br>
+            <code style="color:var(--accent)">python -m uvicorn app.main:app --reload</code>
+            <br><br>
+            If the backend is somewhere else, add it to the URL:<br>
+            <code style="color:var(--accent)">?api=https://your-backend.example.com</code>
+          </div>
+          <button onclick="location.reload()" style="margin-top:18px">Retry</button>
+        </div>
+      </div>`);
+    return false;
+  }
+}
+
+function sessionBoundary(symbol, open){
+  if(/BTC|ETH/.test(symbol)) return "24/7";
+  const now = new Date();
+  const et = new Date(now.toLocaleString("en-US", {timeZone: "America/New_York"}));
+  const day = et.getDay(), hour = et.getHours();
+
+  let target = new Date(et);
+  if(open){
+    // next Friday 17:00 ET
+    target.setDate(et.getDate() + ((5 - day + 7) % 7));
+    target.setHours(17, 0, 0, 0);
+    if(target <= et) target.setDate(target.getDate() + 7);
+  }else{
+    // next Sunday 17:00 ET
+    target.setDate(et.getDate() + ((0 - day + 7) % 7));
+    target.setHours(17, 0, 0, 0);
+    if(target <= et) target.setDate(target.getDate() + 7);
+  }
+  const mins = Math.round((target - et) / 60000);
+  if(mins < 0) return "";
+  const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+  const span = d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  return (open ? "closes in " : "opens in ") + span;
+}
+
+// ---------- timeframes ----------
+// Common ones stay as pills; the full set lives behind the chevron so the
+// header does not turn into twenty buttons.
+let tfAll = [], tfQuick = ["1m","5m","15m","30m","1h","4h","1d"];
+
+async function loadTimeframes(){
+  try{
+    const d = await (await fetch(`${API}/timeframes`)).json();
+    tfAll = d.all.map(x => x.id);
+    tfQuick = d.quick;
+  }catch{ tfAll = [...tfQuick]; }
+  renderTimeframes();
+}
+
+const TF_LABEL = {"1M": "1mo", "1w": "1wk", "3d": "3d"};
+const tfText = tf => TF_LABEL[tf] || tf;
+
+function renderTimeframes(){
+  const bar = document.getElementById("tfBar");
+  // Show the active timeframe as a pill even when it came from the dropdown.
+  const pills = tfQuick.includes(timeframe) ? tfQuick : [...tfQuick, timeframe];
+  bar.innerHTML = pills.map(tf =>
+      `<button data-tf="${tf}" class="${tf === timeframe ? "on" : ""}">${tfText(tf)}</button>`).join("")
+    + `<button class="more" id="tfMore" title="All timeframes">⌄</button>`;
+
+  bar.querySelectorAll("[data-tf]").forEach(b=>{
+    b.onclick = ()=>setTimeframe(b.dataset.tf);
+  });
+  document.getElementById("tfMore").onclick = e=>{
+    e.stopPropagation();
+    document.getElementById("tfPop").classList.toggle("open");
+  };
+
+  const groups = {
+    "Minutes": tfAll.filter(t => t.endsWith("m") && t !== "1M"),  // "1M" is a month
+    "Hours":   tfAll.filter(t => t.endsWith("h")),
+    "Days and above": tfAll.filter(t => t === "1M" || (/d|w/.test(t) && !t.endsWith("m"))),
+  };
+  document.getElementById("tfPop").innerHTML = Object.entries(groups)
+    .filter(([, list]) => list.length)
+    .map(([title, list]) => `<h6>${title}</h6><div class="tfgrid">` +
+      list.map(tf => `<button data-tfp="${tf}" class="${tf === timeframe ? "on" : ""}">${tfText(tf)}</button>`).join("")
+      + `</div>`).join("");
+
+  document.getElementById("tfPop").querySelectorAll("[data-tfp]").forEach(b=>{
+    b.onclick = ()=>{
+      setTimeframe(b.dataset.tfp);
+      document.getElementById("tfPop").classList.remove("open");
+    };
+  });
+}
+
+function setTimeframe(tf){
+  if(tf === timeframe) return;
+  timeframe = tf;
+  firstLoad = true; lastClose = null; lastHeavy = 0; drawnKey = null;
+  try{ localStorage.setItem("tf", tf); }catch{}
+  renderTimeframes();
+  loadChart(); schedule();
+  if(document.getElementById("p-events").classList.contains("on")) loadEvents();
+  if(document.getElementById("p-smc").classList.contains("on")) loadSMC();
+}
+
+document.addEventListener("click", e=>{
+  const pop = document.getElementById("tfPop");
+  if(pop && pop.classList.contains("open") && !pop.contains(e.target)) pop.classList.remove("open");
+});
+
+// ---------- timezone ----------
+// Lightweight Charts renders timestamps as UTC. To show another zone we shift
+// each bar's timestamp by that zone's offset, so UTC rendering lands on local
+// wall-clock time. Offset is computed per-date so DST is handled.
+let TZ = "Asia/Phnom_Penh";
+try{ TZ = localStorage.getItem("tz") || TZ; }catch{}
+
+function tzOffset(tz, date){
+  try{
+    const p = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour12: false, year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+    const asUTC = Date.UTC(+p.year, p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+    return Math.round((asUTC - date.getTime()) / 1000);
+  }catch{ return 0; }
+}
+
+// Timestamps are kept as true UTC everywhere. Only the DISPLAY is localised,
+// through the chart's own formatters. Shifting the data instead was wrong: it
+// double-shifts when the library already localises, and it corrupts any
+// comparison against a real timestamp elsewhere in the app.
+function shift(unixSeconds){
+  return unixSeconds;
+}
+
+function fmtAxis(unixSeconds, withDate){
+  const d = new Date(unixSeconds * 1000);
+  const opts = {timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false};
+  if(withDate){ opts.day = "2-digit"; opts.month = "short"; }
+  return new Intl.DateTimeFormat("en-GB", opts).format(d);
+}
+
+function fmtCrosshair(unixSeconds){
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: TZ, day: "2-digit", month: "short", year: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(unixSeconds * 1000));
+}
+
+function fmt(iso, opts){
+  if(!iso) return "";
+  return new Date(iso).toLocaleString("en-GB", {
+    timeZone: TZ, day: "2-digit", month: "short",
+    hour: "2-digit", minute: "2-digit", hour12: false, ...opts,
+  });
+}
+
+function tzLabel(){
+  const off = Math.round(tzOffset(TZ, new Date()) / 60) / 60;
+  const h = Math.trunc(off), m = Math.abs(Math.round((off - h) * 60));
+  return TZ.split("/").pop().replace("_", " ")
+       + " GMT" + (off >= 0 ? "+" : "") + h + (m ? ":" + String(m).padStart(2,"0") : "");
+}
+const LWC = LightweightCharts;
+
+let symbol = "XAUUSD", timeframe = "15m";
+try{ timeframe = localStorage.getItem("tf") || "15m"; }catch{}
+let chart, candles;
+let priceLines = [];
+
+// ---------- chart ----------
+function initChart(){
+  chart = LWC.createChart(document.getElementById("chart"), {
+    layout:{ background:{type:"solid",color:"#0d1117"}, textColor:"#8b98a8", fontSize:11 },
+    grid:{ vertLines:{color:"#1a212b"}, horzLines:{color:"#1a212b"} },
+    rightPriceScale:{ borderColor:"#232c38", scaleMargins:{top:.1,bottom:.1} },
+    timeScale:{
+      borderColor:"#232c38", timeVisible:true, secondsVisible:false,
+      // Render each tick in the selected timezone. Day boundaries and
+      // higher timeframes get the date; intraday ticks show clock time.
+      tickMarkFormatter: (time, tickType) =>
+        fmtAxis(time, tickType === LWC.TickMarkType.Year
+                   || tickType === LWC.TickMarkType.Month
+                   || tickType === LWC.TickMarkType.DayOfMonth),
+    },
+    localization:{
+      timeFormatter: fmtCrosshair,
+    },
+    crosshair:{ mode:LWC.CrosshairMode.Normal,
+      vertLine:{color:"#4a5568",labelBackgroundColor:"#2d3748"},
+      horzLine:{color:"#4a5568",labelBackgroundColor:"#2d3748"} },
+  });
+
+  // v5: addSeries(SeriesType, options) — not v4's addCandlestickSeries()
+  candles = chart.addSeries(LWC.CandlestickSeries, {
+    upColor:"#26a69a", downColor:"#ef5350", borderVisible:false,
+    wickUpColor:"#26a69a", wickDownColor:"#ef5350",
+  });
+  new ResizeObserver(()=>{
+    Object.values(subCharts).forEach(o=>{
+      try{ o.chart.applyOptions({width: o.el.clientWidth}); }catch{}
+    });
+  }).observe(document.getElementById("chartWrap"));
+
+  chart.subscribeCrosshairMove(p=>{
+    const b = p.seriesData?.get(candles);
+    if(b) drawLegend(b);
+  });
+
+  // Repaint zones on any view change - pan, zoom, or resize.
+  chart.timeScale().subscribeVisibleLogicalRangeChange(()=>paintZones());
+  chart.subscribeCrosshairMove(()=>{});
+  new ResizeObserver(()=>paintZones()).observe(document.getElementById("chartCol"));
+}
+
+function drawLegend(b){
+  const c = b.close>=b.open ? "#26a69a" : "#ef5350";
+  const active = indCatalog.filter(i => indOn.includes(i.id) && i.pane === "price")
+    .map(i => i.label).join("  ·  ");
+  // keep the legend readable when several SMC layers are on
+  document.getElementById("legend").innerHTML =
+    `<b style="color:${c}">O ${b.open}  H ${b.high}  L ${b.low}  C ${b.close}</b>`
+    + (active ? `<br><span style="color:var(--dim)">${active}</span>` : "");
+}
+
+function clearLines(){ priceLines.forEach(l=>candles.removePriceLine(l)); priceLines=[]; }
+
+function addLine(price,color,title,style=LWC.LineStyle.Dashed,width=1){
+  priceLines.push(candles.createPriceLine({price,color,lineWidth:width,lineStyle:style,axisLabelVisible:true,title}));
+}
+
+let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
+let lastHeavy = 0;
+
+async function loadChart(){
+  let d;
+  try{
+    const r = await fetch(`${API}/candles/${symbol}?timeframe=${timeframe}&limit=300`
+                          + `&indicators=${indOn.join(",")}&candle_mode=${candleMode}`);
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    d = await r.json();
+  }catch(e){
+    document.getElementById("src").textContent = "offline";
+    document.getElementById("src").className = "badge fake";
+    return;
+  }
+
+  // Remember where the user was looking so a refresh doesn't yank the view.
+  const range = firstLoad ? null : chart.timeScale().getVisibleLogicalRange();
+
+  const sb = d.bars.map(b => ({...b, time: shift(b.time)}));
+  candles.setData(sb);
+  // With per-bar colours the series defaults must not override them.
+  candles.applyOptions(candleMode === "off"
+    ? {upColor:"#26a69a", downColor:"#ef5350", borderVisible:false,
+       wickUpColor:"#26a69a", wickDownColor:"#ef5350"}
+    : {borderVisible:true});
+  drawIndicators(d.indicators);
+
+  if(firstLoad){ chart.timeScale().fitContent(); firstLoad = false; }
+  else if(range) chart.timeScale().setVisibleLogicalRange(range);
+
+  clearLines();
+  if(autoSR){
+    d.support.forEach(l=>addLine(l.price,"rgba(38,166,154,.55)",`S ${l.touches}`));
+    d.resistance.forEach(l=>addLine(l.price,"rgba(239,83,80,.55)",`R ${l.touches}`));
+  }
+
+  const last = sb.at(-1);
+  drawLegend(last);
+  document.getElementById("sym").textContent = d.symbol;
+
+  const px = document.getElementById("px");
+  px.textContent = last.close.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  // Flash green/red when the price actually moves, so you can see it is live.
+  if(lastClose !== null && last.close !== lastClose){
+    px.style.color = last.close > lastClose ? "var(--up)" : "var(--down)";
+    setTimeout(()=>px.style.color="", 700);
+  }
+  lastClose = last.close;
+
+  const src = document.getElementById("src");
+  src.textContent = d.data_source;
+  // Last candle time in the selected zone - the quickest way to spot a
+  // broker-clock problem, since a wrong offset shows up here immediately.
+  if(d.bars?.length){
+    src.title = (src.title || "") +
+      `\nLast candle: ${fmtCrosshair(d.bars.at(-1).time)} (${tzLabel()})`;
+  }
+  const proxy = d.data_source.includes("proxy");
+  src.className = "badge" + (d.data_source==="synthetic" ? " fake"
+                           : proxy ? " closed" : " live");
+  src.title = d.data_source === "synthetic"
+    ? "FAKE data - no provider configured"
+    : proxy ? "Not the real instrument. Gold here is COMEX futures (GC=F), "
+            + "which trades above spot. Add an OANDA token for true spot."
+    : "Live feed for the actual instrument";
+
+  marketOpen = !d.session.data_stale;
+  const s = document.getElementById("sess");
+  // Mirror the "Open · Closes in 4d 5h" style: state plus time to the next
+  // session boundary, so you know how long the data stays meaningful.
+  const b = sessionBoundary(d.symbol, marketOpen);
+  s.textContent = d.session.state + (b ? " · " + b : "");
+  s.className = "badge" + (marketOpen ? " live" : " closed");
+
+  // Scheduled events move gold far more than headlines do.
+  const evt = document.getElementById("evt");
+  if(d.next_event){
+    const e = d.next_event;
+    evt.className = "badge-evt on" + (e.minutes_away <= 60 ? " soon" : "");
+    evt.id = "evt";
+    evt.classList.add("on");
+    if(e.minutes_away <= 60) evt.classList.add("soon");
+    evt.innerHTML = `<span>📅</span><b>${e.title}</b><span>in ${e.human}</span>
+                     <span style="opacity:.75">· ${fmt(e.at)}</span>`;
+  }else{
+    evt.className = "";
+    evt.id = "evt";
+  }
+
+  // Zones and dashboard change on candle close, not tick by tick. Refetching
+  // them every 3 seconds was three extra round trips per poll for no benefit.
+  const now = Date.now();
+  if(now - lastHeavy > 30000){
+    lastHeavy = now;
+    loadOverlay();
+    loadDashboard();
+  }
+  lastFetch = now;
+}
+
+// ---------- polling ----------
+// Poll fast when the market is open, slowly when it is closed. There is no
+// point hammering a provider for a price that cannot change.
+let autoOn = true, pollTimer = null;
+let pollSeconds = 15;
+try{ pollSeconds = +(localStorage.getItem("poll") || 15); }catch{}
+
+function schedule(){
+  clearTimeout(pollTimer);
+  if(!autoOn) return;
+  // Nothing changes while the market is shut, and a hidden tab does not need
+  // updating at all - both are free savings on a metered provider.
+  const hidden = document.hidden;
+  const wait = hidden ? 120000 : marketOpen ? pollSeconds * 1000 : 120000;
+  pollTimer = setTimeout(async ()=>{ await loadChart(); schedule(); }, wait);
+}
+
+document.addEventListener("visibilitychange", ()=>{
+  if(!document.hidden && autoOn){ loadChart(); }
+  schedule();
+});
+
+async function loadQuota(){
+  const el = document.getElementById("quotaNote");
+  if(!el) return;
+  try{
+    const q = await (await fetch(`${API}/quota`)).json();
+    const ttl = q.ttl_seconds[timeframe] || 45;
+    const metered = Object.entries(q.providers).filter(([,v]) => v.limit);
+
+    let html = `<b>Server refetches every ${ttl}s.</b> Polling faster than that
+      is free — it just re-reads the cache.<br>`;
+
+    if(metered.length){
+      html += metered.map(([k,v]) => {
+        const col = v.pct > 85 ? "var(--danger)" : v.pct > 60 ? "var(--warn)" : "var(--up)";
+        return `<span style="color:${col}">${k}: ${v.used}/${v.limit} used today
+                (${v.remaining} left)</span>`;
+      }).join("<br>");
+      const proj = q.projected_daily[timeframe];
+      if(proj) html += `<br>At this rate: ~${proj.toLocaleString()} requests/day if left running.`;
+    }else{
+      html += `<span style="color:var(--muted)">No metered provider in use yet.</span>`;
+    }
+    if(q.budget_mode) html += `<br><span style="color:var(--accent)">Auto mode:
+      pacing to last the full day.</span>`;
+    el.innerHTML = html;
+  }catch{ el.textContent = "quota unavailable"; }
+}
+
+async function setTTL(v){
+  const body = v === "budget" ? {budget_mode:true}
+             : v === ""       ? {budget_mode:false, seconds:null}
+             : {budget_mode:false, seconds:+v};
+  await fetch(`${API}/quota/ttl`, {method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+  loadQuota();
+}
+
+setInterval(()=>{
+  const el = document.getElementById("ago");
+  if(!lastFetch || !autoOn){ el.textContent = autoOn ? "" : "paused"; return; }
+  const s = Math.round((Date.now()-lastFetch)/1000);
+  el.textContent = s < 60 ? `${s}s ago` : `${Math.floor(s/60)}m ago`;
+}, 1000);
+
+// ---------- streaming ----------
+function bubble(who){
+  const log = document.getElementById("log");
+  if(log.querySelector(".empty")) log.innerHTML = "";
+  const el = document.createElement("div");
+  el.className = "msg";
+  el.innerHTML = `<div class="who">${who}</div><div class="body"></div>`;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  return el.querySelector(".body");
+}
+
+async function stream(url, opts, target){
+  const res = await fetch(url, opts);
+  if(!res.ok){ target.textContent = `Error ${res.status}: ${await res.text()}`; return; }
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+
+  while(true){
+    const {done,value} = await reader.read();
+    if(done) break;
+    buf += dec.decode(value,{stream:true});
+    const parts = buf.split("\n\n"); buf = parts.pop();
+
+    for(const p of parts){
+      if(!p.startsWith("data: ")) continue;
+      let ev; try{ ev = JSON.parse(p.slice(6)); }catch{ continue; }
+
+      if(ev.type==="text"){
+        target.append(ev.text);
+      } else if(ev.type==="tool_start"){
+        const t = document.createElement("div");
+        t.className = "tool";
+        t.textContent = `→ ${ev.name}(${Object.values(ev.input||{}).join(", ")})`;
+        target.after(t);
+      } else if(ev.type==="error"){
+        target.append(`\n[error] ${ev.message}`);
+      }
+      document.getElementById("log").scrollTop = 1e9;
+    }
+  }
+}
+
+async function ask(text){
+  bubble("you").textContent = text;
+  const out = bubble("claude");
+  await stream(`${API}/chat`, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({messages:[{role:"user",content:text}]})
+  }, out);
+}
+
+async function preset(name){
+  bubble("you").textContent = name.replace("_"," ");
+  const out = bubble("claude");
+  await stream(`${API}/chat/preset/${name}?symbol=${symbol}&timeframe=${timeframe}`,
+               {method:"POST"}, out);
+}
+
+// ---------- signal ----------
+async function generate(){
+  const btn = document.getElementById("gen"), out = document.getElementById("sigOut");
+  btn.disabled = true; btn.textContent = "Thinking…";
+  out.innerHTML = '<div class="empty">Analysing…</div>';
+
+  try{
+    const r = await fetch(`${API}/signal/${symbol}?timeframe=${timeframe}`,{method:"POST"});
+    renderSignal(await r.json());
+  }catch(e){
+    out.innerHTML = `<div class="warn">${e.message}</div>`;
+  }finally{
+    btn.disabled = false; btn.textContent = "Generate signal";
+  }
+}
+
+function renderSignal(s){
+  const out = document.getElementById("sigOut");
+  const dir = s.bias==="no_trade" ? "none" : s.bias;
+  let html = "";
+
+  if(s.status && s.status!=="ok")
+    html += `<div class="warn">Blocked: ${s.status.replace(/_/g," ")}</div>`;
+
+  html += `<div class="card ${dir}">
+    <div class="bias ${dir}">${s.bias.replace("_"," ")}</div>`;
+
+  if(s.bias!=="no_trade"){
+    html += `
+      <div class="row"><span>Entry</span><span>${s.entry}</span></div>
+      <div class="row"><span>Stop loss</span><span style="color:var(--down)">${s.stop_loss}</span></div>
+      ${(s.take_profit||[]).map((t,i)=>
+        `<div class="row"><span>Target ${i+1}</span><span style="color:var(--up)">${t}</span></div>`).join("")}
+      <div class="row"><span>Risk : reward</span><span>${s.risk_reward ?? "—"}</span></div>
+      <div class="row"><span>Confidence</span><span>${Math.round((s.confidence||0)*100)}%</span></div>`;
+  }
+
+  if(s.reasoning) html += `<div class="why">${s.reasoning}</div>`;
+  if(s.review){
+    const v = s.review.verdict;
+    const col = v==="approve" ? "var(--up)" : v==="reject" ? "var(--down)" : "var(--warn)";
+    html += `<div class="why" style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+      <b style="color:${col}">Reviewer: ${v}</b>
+      <span style="color:var(--dim);font-size:10px"> · ${s.review.reviewer||""}</span><br>
+      ${s.review.note||""}
+      ${(s.review.concerns||[]).length ? "<br>· " + s.review.concerns.join("<br>· ") : ""}
+    </div>`;
+  }
+  if(s.invalidation) html += `<div class="why"><b>Invalid if:</b> ${s.invalidation}</div>`;
+  if(s.disclaimer) html += `<div class="disc">${s.disclaimer}</div>`;
+  html += `</div>`;
+  out.innerHTML = html;
+
+  // draw the levels on the chart
+  loadChart().then(()=>{
+    if(s.bias==="no_trade") return;
+    addLine(s.entry,"#4a9eff","ENTRY",LWC.LineStyle.Solid,2);
+    addLine(s.stop_loss,"#ef5350","SL",LWC.LineStyle.Solid,2);
+    (s.take_profit||[]).forEach((t,i)=>addLine(t,"#26a69a",`TP${i+1}`,LWC.LineStyle.Solid,2));
+  });
+}
+
+// ---------- event history ----------
+async function loadEvents(){
+  const kind = document.getElementById("evKind").value;
+  const out = document.getElementById("evOut");
+  const btn = document.getElementById("evGo");
+  btn.disabled = true; btn.textContent = "…";
+  out.innerHTML = '<div class="empty">Measuring past reactions…</div>';
+
+  try{
+    const d = await (await fetch(`${API}/events/${symbol}?event=${kind}&count=8`)).json();
+    if(d.error){
+      out.innerHTML = `<div class="warn">${d.error}${d.hint ? "<br>" + d.hint : ""}</div>`;
+      return;
+    }
+
+    const s60 = d.stats["60m"] || Object.values(d.stats)[0] || {};
+    let html = `<div class="statbox">
+      <div class="big">${d.plain_english}</div>
+      <div class="statgrid">
+        <div class="stat"><span>median 1h move</span><b>${s60.median_abs_change ?? "—"}</b></div>
+        <div class="stat"><span>avg 1h range</span><b>${s60.avg_range ?? "—"}</b></div>
+        <div class="stat"><span>up rate</span><b>${s60.up_rate != null ? Math.round(s60.up_rate*100)+"%" : "—"}</b></div>
+        <div class="stat"><span>sample</span><b>${d.sample_size}</b></div>
+      </div>
+    </div>`;
+
+    html += `<div class="evrow head"><div>date</div><div>15m</div><div>1h</div><div>4h</div></div>`;
+    html += d.reactions.map(r=>{
+      const cell = w => {
+        const m = r.moves[w];
+        if(!m) return '<div style="color:var(--dim)">—</div>';
+        return `<div class="${m.direction==="up"?"up":"down"}">${m.change>0?"+":""}${m.change}</div>`;
+      };
+      return `<div class="evrow">
+        <div style="color:var(--muted)">${fmt(r.at, {hour:undefined, minute:undefined, year:"2-digit"})}</div>
+        ${cell("15m")}${cell("60m")}${cell("240m")}
+      </div>`;
+    }).join("");
+
+    html += `<div class="meta" style="margin-top:10px">
+      Measured live from ${d.timeframe} candles · ${d.data_source}
+      ${d.oldest_event ? " · history back to " + d.oldest_event : ""}
+      · ATR ref ${d.atr_reference}</div>`;
+    if(d.sample_size < 5){
+      html += `<div class="warn" style="margin-top:10px">Only ${d.sample_size} events
+        in range — your data provider's history is short. A broker feed (OANDA)
+        goes back further than Yahoo.</div>`;
+    }
+    out.innerHTML = html;
+  }catch(e){
+    out.innerHTML = `<div class="warn">${e.message}</div>`;
+  }finally{
+    btn.disabled = false; btn.textContent = "Analyse";
+  }
+}
+document.getElementById("evGo").onclick = loadEvents;
+document.getElementById("evKind").onchange = loadEvents;
+
+// ---------- news ----------
+const DIR = {bullish:["bull","▲"], bearish:["bear","▼"], neutral:["neut","–"]};
+
+function ago(iso){
+  if(!iso) return "";
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  if(m < 1) return "just now";
+  if(m < 60) return m + "m ago";
+  if(m < 1440) return Math.floor(m/60) + "h ago";
+  return Math.floor(m/1440) + "d ago";
+}
+
+let newsFilter = "all";
+
+async function loadNews(){
+  const out = document.getElementById("newsOut");
+  try{
+    const d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json();
+
+    // Client-side filtering keeps the fetch cheap and the toggle instant.
+    const RANK = {low:1, medium:2, high:3};
+    let items = d.items;
+    if(newsFilter === "scored") items = items.filter(i => i.tagged || i.scored_by);
+    if(newsFilter === "medium") items = items.filter(i => RANK[i.impact] >= 2);
+    if(newsFilter === "high")   items = items.filter(i => i.impact === "high");
+
+    // Highest impact first, then newest - the way a desk reads a wire.
+    items.sort((a,b)=>{
+      const r = RANK[b.impact] - RANK[a.impact];
+      return r || (new Date(b.published_at) - new Date(a.published_at));
+    });
+    items = items.slice(0, 30);
+
+    d.items = items;
+    if(!d.items.length){
+      out.innerHTML = newsFilter === "all"
+        ? '<div class="empty">No headlines yet.<br>Tap "Pull latest news".</div>'
+        : `<div class="empty">Nothing at this level yet.<br>
+           <span style="color:var(--dim)">Scoring is what assigns impact — switch to
+           All to see unscored headlines.</span></div>`;
+      return;
+    }
+
+    const s = d.sentiment;
+    const cls = s.label==="bullish" ? "var(--up)" : s.label==="bearish" ? "var(--down)" : "var(--muted)";
+    let html = `<div class="senti">
+      <span style="color:var(--muted)">${s.bucket} sentiment</span>
+      <b style="color:${cls}">${s.label}</b>
+      <span style="margin-left:auto;color:var(--dim)">${s.articles} stories${s.high_impact ? " · " + s.high_impact + " high impact" : ""}</span>
+    </div>`;
+
+    html += d.items.map(i => {
+      // Untagged headlines have no sentiment yet - show the article, mark it
+      // pending, and do not fake a neutral reading as if it were analysed.
+      // Rule-scored items are real, just less nuanced than AI-scored ones -
+      // label the source rather than pretending they are equivalent.
+      const scored = i.tagged || i.scored_by;
+      const tags = scored
+        ? Object.entries(i.assets).map(([k,v]) => {
+            const [c, arrow] = DIR[v] || DIR.neutral;
+            return `<span class="tag">${k}<b class="${c}">${arrow} ${v}</b></span>`;
+          }).join("") + (i.scored_by === "rules"
+              ? `<span class="tag" style="color:var(--dim)" title="Keyword rules, not AI">rules</span>` : "")
+        : `<span class="tag" style="color:var(--dim)">no signal</span>`;
+      const title = i.url
+        ? `<a href="${i.url}" target="_blank" rel="noopener">${i.title}</a>`
+        : i.title;
+      return `<div class="news-item">
+        <div class="news-head">
+          <span class="imp ${i.impact}">${i.impact}</span>
+          <span style="font-size:10px;color:var(--dim)">${i.source||""}</span>
+          <span style="font-size:10px;color:var(--dim);margin-left:auto"
+                title="${fmt(i.published_at)}">${i.date_known === false ? "~" : ""}${ago(i.published_at)}</span>
+        </div>
+        <div class="news-title">${title}</div>
+        <div class="tags">${tags}</div>
+        ${i.takeaway ? `<div class="take"><span>⚡</span><span>${i.takeaway}</span></div>` : ""}
+      </div>`;
+    }).join("");
+    out.innerHTML = html;
+  }catch(e){
+    out.innerHTML = `<div class="warn">Could not load news: ${e.message}</div>`;
+  }
+}
+
+async function pullNews(){
+  const btn = document.getElementById("pullNews");
+  const out = document.getElementById("newsOut");
+  btn.disabled = true; btn.textContent = "Fetching…";
+  out.innerHTML = '<div class="empty">Reading feeds and scoring headlines…<br>' +
+                  'Usually 10–20 seconds.</div>';
+
+  // Tagging can take a while; abort cleanly rather than leaving the browser
+  // to time out with an opaque "Failed to fetch".
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 120000);
+
+  try{
+    const res = await fetch(`${API}/news/ingest`, {method:"POST", signal: ctrl.signal});
+    if(!res.ok) throw new Error(`Server returned ${res.status}`);
+    const r = await res.json();
+
+    if(r.fetched === 0){
+      await showFeedDiagnostics(r.hint);
+      return;
+    }
+    await loadNews();
+
+    if(r.tagged === 0 && r.new > 0){
+      // Headlines are saved and on screen; only the scoring failed.
+      out.insertAdjacentHTML("afterbegin",
+        `<div class="warn">Saved ${r.new} headlines · scoring unavailable<br>
+         <span style="color:var(--dim)">${r.hint || "Check the AI provider in settings."}</span></div>`);
+    }else if(r.remaining_untagged > 0){
+      out.insertAdjacentHTML("afterbegin",
+        `<div style="font-size:11.5px;color:var(--dim);margin-bottom:10px">
+         ${r.tagged} scored · ${r.remaining_untagged} still to score —
+         <a href="#" id="tagMore" style="color:var(--accent)">score more</a></div>`);
+      const link = document.getElementById("tagMore");
+      if(link) link.onclick = async e=>{
+        e.preventDefault();
+        link.textContent = "scoring…";
+        await fetch(`${API}/news/tag`, {method:"POST"});
+        await loadNews();
+      };
+    }
+
+    btn.textContent = r.tagged ? `+${r.new} · ${r.tagged} scored` : `+${r.new} headlines`;
+    setTimeout(()=>btn.textContent = "Pull latest news", 2500);
+  }catch(e){
+    const msg = e.name === "AbortError"
+      ? "Timed out after 2 minutes. The AI provider may be slow or unreachable."
+      : e.message === "Failed to fetch"
+        ? "Could not reach the server. Is it still running on port 8000?"
+        : e.message;
+    out.innerHTML = `<div class="warn">${msg}</div>`;
+    await showFeedDiagnostics();
+  }finally{
+    clearTimeout(timer);
+    btn.disabled = false;
+    if(btn.textContent === "Fetching…") btn.textContent = "Pull latest news";
+  }
+}
+
+async function showFeedDiagnostics(hint){
+  const out = document.getElementById("newsOut");
+  try{
+    const d = await (await fetch(`${API}/news/feeds`)).json();
+    const rows = d.feeds.map(f=>{
+      const ok = f.ok;
+      return `<div class="smcrow"><span style="color:${ok ? "var(--up)" : "var(--down)"}">
+        ${ok ? "OK" : "FAIL"}</span><span>${f.name}</span>
+        <span style="color:var(--dim);font-size:11px">${ok ? f.headlines + " items" : (f.error || "HTTP " + f.status)}</span></div>`;
+    }).join("");
+    const working = d.feeds.filter(f=>f.ok).length;
+    out.innerHTML = `<div class="warn">${hint || "News fetch failed."}</div>
+      <div class="smchead">Feed check — ${working}/${d.feeds.length} reachable</div>${rows}
+      ${working === 0 ? `<div style="font-size:11.5px;color:var(--dim);margin-top:10px;line-height:1.55">
+        No feeds are reachable from this machine. Your ISP or a firewall may be
+        blocking them. A Finnhub key gives you a single API endpoint instead of
+        five publisher feeds:<br>
+        <code style="color:var(--muted)">python setup_key.py finnhub YOUR-KEY</code>
+      </div>` : ""}`;
+  }catch{
+    out.innerHTML = `<div class="warn">${hint || "News fetch failed and the feed check is unreachable."}</div>`;
+  }
+}
+
+document.getElementById("pullNews").onclick = pullNews;
+document.getElementById("refreshNews").onclick = loadNews;
+document.getElementById("clearNews").onclick = async ()=>{
+  await fetch(`${API}/news`, {method:"DELETE"});
+  document.getElementById("newsOut").innerHTML =
+    '<div class="empty">Cleared. Tap "Pull latest news".</div>';
+};
+document.querySelectorAll("#impBar [data-imp]").forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll("#impBar [data-imp]").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on");
+    newsFilter = b.dataset.imp;
+    loadNews();
+  };
+});
+
+// ---------- zone overlay ----------
+// Lightweight Charts has no box primitive. The chart exposes price->pixel and
+// time->pixel converters though, so zones are painted on a transparent canvas
+// sitting over the chart and redrawn whenever the view changes.
+let overlayData = null, zonesOn = true, markerApi = null;
+try{ zonesOn = localStorage.getItem("zones") !== "0"; }catch{}
+
+function sizeCanvas(){
+  const cv = document.getElementById("zoneCanvas");
+  const col = document.getElementById("chartCol");
+  const dpr = window.devicePixelRatio || 1;
+  const w = col.clientWidth, h = col.clientHeight;
+  // Assigning width/height clears the canvas and reallocates - only do it on a
+  // genuine resize, not on every frame.
+  if(cv.width !== w * dpr || cv.height !== h * dpr){
+    cv.width = w * dpr;
+    cv.height = h * dpr;
+    cv.style.width = w + "px";
+    cv.style.height = h + "px";
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+let paintQueued = false;
+function paintZones(){
+  // Pan and zoom fire this continuously. Coalesce to one paint per frame.
+  if(paintQueued) return;
+  paintQueued = true;
+  requestAnimationFrame(()=>{ paintQueued = false; paintZonesNow(); });
+}
+
+function paintZonesNow(){
+  const cv = document.getElementById("zoneCanvas");
+  if(!cv) return;
+  const ctx = sizeCanvas();
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if(!overlayData || !zonesOn) return;
+
+  const ts = chart.timeScale();
+  const right = cv.clientWidth;
+
+  for(const z of overlayData.zones){
+    const yTop = candles.priceToCoordinate(z.top);
+    const yBot = candles.priceToCoordinate(z.bottom);
+    if(yTop == null || yBot == null) continue;
+
+    let xL = ts.timeToCoordinate(shift(z.since));
+    if(xL == null){
+      // Zone formed before the visible range - clamp to the left edge rather
+      // than dropping it, otherwise levels vanish when you scroll back.
+      const vr = ts.getVisibleRange();
+      if(!vr || shift(z.since) > vr.to) continue;
+      xL = 0;
+    }
+
+    const h = Math.abs(yBot - yTop), y = Math.min(yTop, yBot);
+    ctx.fillStyle = `rgba(${z.color},0.13)`;
+    ctx.fillRect(xL, y, right - xL, h);
+
+    ctx.strokeStyle = `rgba(${z.color},0.55)`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash(z.dashed ? [4, 3] : []);
+    ctx.strokeRect(xL + 0.5, y + 0.5, right - xL - 1, Math.max(h - 1, 1));
+    ctx.setLineDash([]);
+
+    if(z.label && h > 16 && right - xL > 90){
+      ctx.fillStyle = `rgba(${z.color},0.95)`;
+      ctx.font = "10px -apple-system,Segoe UI,sans-serif";
+      ctx.textBaseline = "top";
+      z.label.split("\n").forEach((line, i)=>{
+        ctx.fillText(line, xL + 6, y + 4 + i * 12);
+      });
+    }
+  }
+}
+
+async function loadOverlay(){
+  try{
+    overlayData = await (await fetch(`${API}/overlay/${symbol}?timeframe=${timeframe}`)).json();
+  }catch{ overlayData = null; return; }
+
+  // Event markers use the real marker API - those Lightweight Charts does have.
+  try{
+    const ms = overlayData.markers.map(m=>({...m, time: shift(m.time)}));
+    if(markerApi) markerApi.setMarkers(zonesOn ? ms : []);
+    else if(LWC.createSeriesMarkers) markerApi = LWC.createSeriesMarkers(candles, zonesOn ? ms : []);
+    else candles.setMarkers(zonesOn ? ms : []);
+  }catch(e){ console.warn("markers unavailable", e); }
+
+  paintZones();
+}
+
+// ---------- on-chart dashboard ----------
+// The dashboard covers a third of a phone screen - off by default there.
+let dashOn = !window.matchMedia("(max-width: 900px)").matches;
+try{
+  const saved = localStorage.getItem("dash");
+  if(saved !== null) dashOn = saved !== "0";
+}catch{}
+
+const GOOD = ["bull", "long", "buy", "up", "same direction", "discount"];
+const BAD  = ["bear", "short", "sell", "down", "diverging", "premium"];
+function tint(v){
+  const t = String(v).toLowerCase();
+  if(GOOD.some(w => t.includes(w))) return "var(--up)";
+  if(BAD.some(w => t.includes(w)))  return "var(--down)";
+  if(t.includes("wait") || t.includes("broken") || t.includes("cancel")) return "var(--warn)";
+  return "var(--text)";
+}
+
+async function loadDashboard(){
+  const dp = document.getElementById("dashPanel");
+  const bp = document.getElementById("btcPanel");
+  if(!dp) return;
+  dp.classList.toggle("on", dashOn);
+  bp.classList.toggle("on", dashOn);
+  if(!dashOn) return;
+
+  try{
+    const d = await (await fetch(`${API}/dashboard/${symbol}?timeframe=${timeframe}`)).json();
+
+    let h = `<div class="hd"><span>SMC + KTR</span><span style="color:var(--text)">${d.symbol}</span></div>`;
+    for(const [k, v] of Object.entries(d.rows)){
+      h += `<div class="rw"><span>${k}</span><span style="color:${tint(v)}">${v ?? "—"}</span></div>`;
+    }
+    const c = d.cascade;
+    h += `<div class="sec">Cascade</div>
+      <div class="rw"><span>1 Bias</span><span style="color:${tint(c.bias)}">${c.bias}</span></div>
+      <div class="rw"><span>2 Confirm</span><span style="color:${tint(c.confirm)}">${c.confirm}</span></div>
+      <div class="rw"><span>3 Entry</span><span style="color:${c.ready ? "var(--up)" : tint(c.entry)}">${c.entry}</span></div>
+      <div class="rw"><span>Price</span><span style="color:var(--text)">${d.price}</span></div>`;
+    dp.innerHTML = h;
+
+    if(d.btc){
+      const b = d.btc;
+      bp.innerHTML = `<div class="hd"><span>₿ BTC</span><span style="color:var(--text)">${b.symbol}</span></div>
+        <div class="rw"><span>Price</span><span style="color:${b.candle==="bull"?"var(--up)":"var(--down)"}">${b.price.toLocaleString()}</span></div>
+        <div class="rw"><span>Day</span><span style="color:${b.day_change_pct>=0?"var(--up)":"var(--down)"}">${b.day_change_pct>=0?"+":""}${b.day_change_pct}%</span></div>
+        <div class="rw"><span>Trend</span><span style="color:${tint(b.trend)}">${b.trend}</span></div>
+        <div class="rw"><span>Momentum</span><span style="color:${tint(b.momentum)}">${b.momentum}</span></div>
+        <div class="rw"><span>Alignment</span><span style="color:${tint(b.alignment)}">${b.alignment}</span></div>
+        <div class="rw"><span style="color:var(--muted)">${b.hint}</span></div>`;
+      bp.classList.add("on");
+    }else{
+      bp.classList.remove("on");
+    }
+  }catch{ }
+}
+
+// ---------- cascade ----------
+async function loadCascade(){
+  const box = document.getElementById("cascadeBox");
+  if(!box) return;
+  try{
+    const c = await (await fetch(`${API}/cascade/${symbol}?timeframe=${timeframe}`)).json();
+    if(c.stage === "no_data"){ box.innerHTML = ""; return; }
+
+    if(c.stage === "not_applicable"){
+      box.innerHTML = `<div class="casc">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.7px;
+                    color:var(--dim);margin-bottom:6px">Top-down cascade</div>
+        <div class="verdict" style="border:0;padding-top:0">${c.message}</div>
+      </div>`;
+      return;
+    }
+
+    const reached = c.stage;
+    const blocked = /cancelled|blocked/.test(c.status);
+    const cls = n => n < reached ? "done"
+                   : n === reached ? (c.ready ? "done" : blocked ? "block" : "wait")
+                   : "wait";
+    const dirCol = c.direction === "long" ? "var(--up)"
+                 : c.direction === "short" ? "var(--down)" : "var(--muted)";
+
+    box.innerHTML = `<div class="casc">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.7px;
+                  color:var(--dim);margin-bottom:6px">Top-down cascade
+        <b style="color:${dirCol};float:right;text-transform:none;font-size:12px">
+          ${c.direction || "no bias"}</b></div>
+
+      <div class="stg ${cls(1)}"><span class="n">1</span>
+        <span>${tfText(c.bias.timeframe)} bias</span>
+        <small>${c.bias.structure} · ${c.bias.signal}</small></div>
+
+      <div class="stg ${cls(2)}"><span class="n">2</span>
+        <span>${tfText(c.confirm.timeframe)} confirm</span>
+        <small>${c.confirm.structure}</small></div>
+
+      <div class="stg ${cls(3)}"><span class="n">3</span>
+        <span>${tfText(c.entry.timeframe)} trigger</span>
+        <small>${c.trigger || c.entry.pd_zone}</small></div>
+
+      <div class="verdict">${c.message}</div>
+      ${c.ready ? `<div style="margin-top:9px;padding:8px 10px;border-radius:6px;
+        background:rgba(38,166,154,.12);border:1px solid var(--up);
+        color:var(--up);font-size:12px;font-weight:600">All three align — ${c.direction}</div>` : ""}
+    </div>`;
+  }catch{ box.innerHTML = ""; }
+}
+
+// ---------- SMC ----------
+let smcLines = [], smcDraw = true;
+try{ smcDraw = localStorage.getItem("smcDraw") !== "0"; }catch{}
+
+function clearSMC(){ smcLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch{} }); smcLines = []; }
+
+function smcLine(price, color, title, width=1){
+  if(price == null) return;
+  smcLines.push(candles.createPriceLine({price, color, lineWidth:width,
+    lineStyle:LWC.LineStyle.Dashed, axisLabelVisible:true, title}));
+}
+
+async function loadSMC(){
+  const out = document.getElementById("smcOut"), btn = document.getElementById("smcGo");
+  btn.disabled = true; btn.textContent = "…";
+  try{
+    const d = await (await fetch(`${API}/smc/${symbol}?timeframe=${timeframe}`)).json();
+    if(d.error){ out.innerHTML = `<div class="warn">${d.error}</div>`; return; }
+
+    const pd = d.pd_array, st = d.structure, ktrL = d.ktr.levels;
+    const dirCol = v => v === "bullish" ? "var(--up)" : v === "bearish" ? "var(--down)" : "var(--muted)";
+
+    loadCascade();
+    let h = `<div class="statbox"><div class="big">${d.read}</div></div>`;
+
+    h += `<div class="smchead">Structure</div>
+      <div class="smcrow"><span>Trend</span><span style="color:${dirCol(st.trend)}">${st.trend}</span></div>`;
+    if(st.last_event) h += `<div class="smcrow"><span>Last event</span>
+      <span style="color:${dirCol(st.last_event.dir)}">${st.last_event.type} ${st.last_event.dir} @ ${st.last_event.level.toFixed(2)}</span></div>`;
+    h += `<div class="smcrow"><span>Swing H / L</span><span>${st.last_swing_high ?? "—"} / ${st.last_swing_low ?? "—"}</span></div>`;
+
+    h += `<div class="smchead">PD array</div>
+      <div class="smcrow"><span>${pd.broken ? "Status" : "Zone"}</span>
+        <span style="color:${pd.broken ? "var(--warn)" : pd.zone.includes("premium") ? "var(--down)" : pd.zone.includes("discount") ? "var(--up)" : "var(--muted)"}">${pd.zone}</span></div>
+      <div class="smcrow"><span>Position</span><span>${pd.position_pct}%</span></div>`;
+
+    if(d.ktr.applicable === false){
+      h += `<div class="smchead">KTR</div>
+        <div style="font-size:11.5px;color:var(--dim);line-height:1.5">${d.ktr.reason}</div>`;
+    }else{
+      h += `<div class="smchead">KTR · ${d.ktr.position}</div>`;
+      for(const [k,v] of Object.entries(ktrL)){
+        if(v == null) continue;
+        h += `<div class="smcrow"><span>${k}</span><span>${v.toFixed(2)}</span></div>`;
+      }
+    }
+
+    const dem = d.order_blocks.nearest_demand, sup = d.order_blocks.nearest_supply;
+    h += `<div class="smchead">Order blocks</div>`;
+    if(dem) h += `<div class="zone dem"><b>Demand</b> ${dem.bottom} – ${dem.top}
+      <span style="color:var(--dim)"> · ${dem.strength} vol ${dem.volume_pct}% · ${dem.distance_pct}%</span></div>`;
+    if(sup) h += `<div class="zone sup"><b>Supply</b> ${sup.bottom} – ${sup.top}
+      <span style="color:var(--dim)"> · ${sup.strength} vol ${sup.volume_pct}% · ${sup.distance_pct}%</span></div>`;
+    if(!dem && !sup) h += `<div style="color:var(--dim);font-size:12px">No unmitigated blocks nearby.</div>`;
+
+    h += `<div class="smchead">Fair value gaps</div>`;
+    const gaps = [...d.fvg.bullish_open.slice(-2).map(g=>({...g,d:"dem"})),
+                  ...d.fvg.bearish_open.slice(-2).map(g=>({...g,d:"sup"}))];
+    h += gaps.length ? gaps.map(g=>`<div class="zone ${g.d}">${g.bottom} – ${g.top}
+      <span style="color:var(--dim)"> · CE ${g.ce} · ${g.distance_pct}%</span></div>`).join("")
+      : `<div style="color:var(--dim);font-size:12px">No unfilled gaps.</div>`;
+
+    const lq = d.liquidity;
+    h += `<div class="smchead">Liquidity</div>
+      <div class="smcrow"><span>BSL</span><span>${lq.bsl ?? "—"} ${lq.bsl_swept ? "<b style='color:var(--warn)'>SWEPT</b>" : ""}</span></div>
+      <div class="smcrow"><span>SSL</span><span>${lq.ssl ?? "—"} ${lq.ssl_swept ? "<b style='color:var(--warn)'>SWEPT</b>" : ""}</span></div>`;
+    if(lq.eqh?.length) h += `<div class="smcrow"><span>EQH</span><span>${lq.eqh.join(", ")}</span></div>`;
+    if(lq.eql?.length) h += `<div class="smcrow"><span>EQL</span><span>${lq.eql.join(", ")}</span></div>`;
+
+    h += `<div class="smchead">Triggers</div>
+      <div class="smcrow"><span>CISD</span><span style="color:${dirCol(d.cisd.signal)}">${d.cisd.signal ? d.cisd.signal + " @ " + d.cisd.level : "—"}</span></div>
+      <div class="smcrow"><span>CRT</span><span style="color:${dirCol(d.crt.signal)}">${d.crt.signal || "—"}</span></div>
+      <div class="smcrow"><span>Order flow</span><span style="color:${d.order_flow.delta_pct>=0?"var(--up)":"var(--down)"}">${d.order_flow.bias} ${Math.abs(d.order_flow.delta_pct)}%</span></div>
+      <div class="smcrow"><span>KTR trend</span><span style="color:${dirCol(d.ktr_trend)}">${d.ktr_trend}</span></div>`;
+
+    out.innerHTML = h;
+
+    clearSMC();
+    if(smcDraw){
+      if(d.ktr.applicable !== false){
+      smcLine(ktrL.OP, "#ffffff", "OP", 2);
+      smcLine(ktrL.MLP, "#d4af37", "MLP");
+      [1,2,3].forEach(n=>{
+        smcLine(ktrL[`KTR+${n}`], ["#00e676","#ffeb3b","#ff9800"][n-1], `KTR+${n}`);
+        smcLine(ktrL[`KTR-${n}`], ["#00e676","#ffeb3b","#ff9800"][n-1], `KTR-${n}`);
+      });
+      }
+      if(lq.bsl) smcLine(lq.bsl, "#ff9800", "BSL");
+      if(lq.ssl) smcLine(lq.ssl, "#00bcd4", "SSL");
+      if(dem){ smcLine(dem.top, "rgba(38,166,154,.8)", "OB dem hi");
+               smcLine(dem.bottom, "rgba(38,166,154,.8)", "OB dem lo"); }
+      if(sup){ smcLine(sup.top, "rgba(239,83,80,.8)", "OB sup hi");
+               smcLine(sup.bottom, "rgba(239,83,80,.8)", "OB sup lo"); }
+      if(d.cisd.signal) smcLine(d.cisd.level, d.cisd.signal==="bullish"?"#00c853":"#d50000", "CISD", 2);
+    }
+  }catch(e){
+    out.innerHTML = `<div class="warn">${e.message}</div>`;
+  }finally{ btn.disabled = false; btn.textContent = "Refresh SMC"; }
+}
+
+document.getElementById("smcGo").onclick = loadSMC;
+document.getElementById("smcDraw").classList.toggle("on", smcDraw);
+document.getElementById("smcDraw").onclick = ()=>{
+  smcDraw = !smcDraw;
+  try{ localStorage.setItem("smcDraw", smcDraw ? "1" : "0"); }catch{}
+  document.getElementById("smcDraw").classList.toggle("on", smcDraw);
+  if(!smcDraw) clearSMC(); else loadSMC();
+};
+
+// ---------- news auto-refresh ----------
+let newsPollTs = null;        // last-seen timestamp
+let newsTimer = null;
+let newsAlertShown = new Set();  // fingerprints we have already notified
+
+function startNewsPolling(){
+  if(newsTimer) return;
+  newsTimer = setInterval(pollForNews, 90000); // check every 90 seconds
+}
+
+async function pollForNews(){
+  try{
+    const url = `${API}/news/poll?symbol=${symbol}` +
+                (newsPollTs ? `&since=${encodeURIComponent(newsPollTs)}` : "");
+    const r = await (await fetch(url)).json();
+    newsPollTs = r.timestamp;
+
+    if(!r.new_count) return;
+
+    // Refresh the panel if it is visible, or show a badge if it is not.
+    const newsPane = document.getElementById("p-news");
+    if(newsPane && newsPane.classList.contains("on")){
+      await loadNews();
+    }else{
+      showNewsBadge(r.new_count, r.high_impact);
+    }
+
+    // Notification for high-impact headlines not yet alerted.
+    for(const item of r.items){
+      if(item.impact !== "high") continue;
+      const fp = item.fingerprint || item.title;
+      if(newsAlertShown.has(fp)) continue;
+      newsAlertShown.add(fp);
+      showNewsAlert(item);
+      break;   // one alert at a time
+    }
+  }catch(e){ console.debug("news poll:", e.message); }
+}
+
+function showNewsBadge(count, high){
+  const tab = document.querySelector(".tab[data-p=\"news\"]");
+  if(!tab) return;
+  const imp = high ? `${high} HIGH` : `+${count}`;
+  const col = high ? "var(--down)" : "var(--accent)";
+  tab.innerHTML = `News <span style="background:${col};color:#04121f;border-radius:9px;
+    padding:1px 6px;font-size:10px;font-weight:700;vertical-align:middle">${imp}</span>`;
+  tab.onclick = ()=>{
+    tab.innerHTML = "News";
+    loadNews();
+  };
+}
+
+function showNewsAlert(item){
+  const el = document.createElement("div");
+  el.style.cssText = `position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+    z-index:200;max-width:340px;width:90%;background:var(--panel);
+    border:1px solid ${item.assets?.gold==="bullish"?"var(--up)":"var(--down)"};
+    border-radius:10px;padding:12px 14px;box-shadow:0 8px 28px rgba(0,0,0,.7);
+    font-size:12.5px;line-height:1.45;cursor:pointer`;
+  const dir = item.assets?.gold==="bullish" ? "▲ GOLD BULLISH" :
+              item.assets?.gold==="bearish" ? "▼ GOLD BEARISH" : "⬥ HIGH IMPACT";
+  const col = item.assets?.gold==="bullish" ? "var(--up)" :
+              item.assets?.gold==="bearish" ? "var(--down)" : "var(--warn)";
+  el.innerHTML = `<div style="color:${col};font-weight:700;margin-bottom:5px">${dir}</div>
+    <div style="color:var(--text)">${item.title}</div>
+    <div style="color:var(--dim);font-size:10.5px;margin-top:6px">${item.source} · tap to dismiss</div>`;
+  el.onclick = ()=>el.remove();
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(), 12000);
+}
+
+// ---------- indicators ----------
+let indCatalog = [], indOn = ["ema"], indSeries = {}, subCharts = {};
+// Auto support/resistance (the S1/R2 tags) is drawn by loadChart, not the
+// indicator engine, so it gets its own switch. Off when you are running SMC
+// levels, otherwise the price axis turns into soup.
+let autoSR = true;
+try{ autoSR = localStorage.getItem("autoSR") !== "0"; }catch{}
+
+let candleMode = "off";
+try{ candleMode = localStorage.getItem("candleMode") || "off"; }catch{}
+
+// One-click layouts. Clean is the KTR chart as its author runs it: levels,
+// the 30MA, coloured candles, nothing else competing for attention.
+const PRESETS = {
+  clean:   {ind: ["ktr_levels", "ktr_ma", "pivot01"], zones: false, sr: false, candle: "ktr", dash: true},
+  smc:     {ind: ["smc_ob", "smc_fvg", "smc_liq", "smc_pd"], zones: true,  sr: false, candle: "off", dash: true},
+  classic: {ind: ["ema"], zones: false, sr: true,  candle: "off", dash: false},
+};
+
+function applyPreset(name){
+  const p = PRESETS[name];
+  if(!p) return;
+  indOn = [...p.ind];
+  zonesOn = p.zones;
+  autoSR = p.sr;
+  candleMode = p.candle;
+  if(p.dash !== undefined) dashOn = p.dash;
+  try{
+    localStorage.setItem("indicators", JSON.stringify(indOn));
+    localStorage.setItem("zones", zonesOn ? "1" : "0");
+    localStorage.setItem("autoSR", autoSR ? "1" : "0");
+    localStorage.setItem("candleMode", candleMode);
+    localStorage.setItem("dash", dashOn ? "1" : "0");
+  }catch{}
+  renderIndicatorMenu();
+  firstLoad = true;
+  loadChart();
+}
+try{
+  const saved = JSON.parse(localStorage.getItem("indicators") || "null");
+  if(Array.isArray(saved)) indOn = saved;
+}catch{}
+
+async function loadIndicatorCatalog(){
+  try{
+    indCatalog = (await (await fetch(`${API}/indicators`)).json()).indicators;
+  }catch{ return; }
+  renderIndicatorMenu();
+}
+
+function renderIndicatorMenu(){
+  const pop = document.getElementById("indPop");
+  const groups = {smc: "SMC / ICT", price: "On the chart", pane: "Separate panel"};
+  let html = `<h5>Layout</h5>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:4px">
+      <button data-preset-view="clean"   style="font-size:11px;padding:7px 4px">Clean KTR</button>
+      <button data-preset-view="smc"     style="font-size:11px;padding:7px 4px">SMC full</button>
+      <button data-preset-view="classic" style="font-size:11px;padding:7px 4px">Classic</button>
+    </div>
+
+    <h5>Candle colouring</h5>
+    <div class="ind ${candleMode === "ktr" ? "on" : ""}" data-candle="ktr">
+      <span class="box"></span>KTR trend (yellow / red)</div>
+    <div class="ind ${candleMode === "orderflow" ? "on" : ""}" data-candle="orderflow">
+      <span class="box"></span>Order flow</div>
+    <div class="ind ${candleMode === "off" ? "on" : ""}" data-candle="off">
+      <span class="box"></span>Default</div>
+
+    <h5>Chart overlay</h5>
+    <div class="ind ${dashOn ? "on" : ""}" data-toggle="dash">
+      <span class="box"></span>Dashboard panels</div>
+    <div class="ind ${zonesOn ? "on" : ""}" data-toggle="zones">
+      <span class="box"></span>Zones &amp; event markers</div>
+    <div class="ind ${autoSR ? "on" : ""}" data-toggle="autoSR">
+      <span class="box"></span>Support / resistance (S·R)</div>`;
+  for(const [g, title] of Object.entries(groups)){
+    const items = indCatalog.filter(i => (i.group || (i.pane === "price" ? "price" : "pane")) === g);
+    if(!items.length) continue;
+    html += `<h5>${title}</h5>` + items.map(i =>
+      `<div class="ind ${indOn.includes(i.id) ? "on" : ""}" data-ind="${i.id}">
+         <span class="box"></span>${i.label}</div>`).join("");
+  }
+  pop.innerHTML = html;
+  pop.querySelectorAll("[data-preset-view]").forEach(b=>{
+    b.onclick = e=>{ e.stopPropagation(); applyPreset(b.dataset.presetView); };
+  });
+
+  pop.querySelectorAll("[data-candle]").forEach(el=>{
+    el.onclick = ()=>{
+      candleMode = el.dataset.candle;
+      try{ localStorage.setItem("candleMode", candleMode); }catch{}
+      renderIndicatorMenu();
+      loadChart();
+    };
+  });
+
+  pop.querySelector('[data-toggle="dash"]').onclick = ()=>{
+    dashOn = !dashOn;
+    try{ localStorage.setItem("dash", dashOn ? "1" : "0"); }catch{}
+    renderIndicatorMenu();
+    loadDashboard();
+  };
+
+  pop.querySelector('[data-toggle="zones"]').onclick = ()=>{
+    zonesOn = !zonesOn;
+    try{ localStorage.setItem("zones", zonesOn ? "1" : "0"); }catch{}
+    renderIndicatorMenu();
+    loadOverlay();
+  };
+
+  pop.querySelector('[data-toggle="autoSR"]').onclick = ()=>{
+    autoSR = !autoSR;
+    try{ localStorage.setItem("autoSR", autoSR ? "1" : "0"); }catch{}
+    renderIndicatorMenu();
+    loadChart();
+  };
+
+  pop.querySelectorAll(".ind[data-ind]").forEach(el=>{
+    el.onclick = ()=>{
+      const id = el.dataset.ind;
+      indOn = indOn.includes(id) ? indOn.filter(x=>x!==id) : [...indOn, id];
+      try{ localStorage.setItem("indicators", JSON.stringify(indOn)); }catch{}
+      renderIndicatorMenu();
+      loadChart();
+    };
+  });
+}
+
+function clearIndicators(){
+  Object.values(indSeries).forEach(s => { try{ chart.removeSeries(s); }catch{} });
+  indSeries = {};
+  Object.values(subCharts).forEach(o => { try{ o.chart.remove(); }catch{} });
+  subCharts = {};
+  document.getElementById("panes").innerHTML = "";
+  drawnKey = null;
+}
+
+// Signature of the current chart structure. Rebuilding series is expensive and
+// visibly janky; when only the DATA changed we reuse the existing series and
+// just push new points into them.
+let drawnKey = null;
+function structureKey(payload){
+  return Object.entries(payload || {})
+    .map(([id, spec]) => spec.error ? id + ":err"
+         : `${id}:${spec.pane}:${Object.keys(spec.series).join("|")}`)
+    .sort().join(",");
+}
+
+function makeSubPane(key, label, height){
+  const wrap = document.createElement("div");
+  wrap.className = "subpane";
+  wrap.style.height = height + "px";
+  wrap.innerHTML = `<div class="plabel">${label}</div>`;
+  document.getElementById("panes").appendChild(wrap);
+
+  const c = LWC.createChart(wrap, {
+    height,
+    layout:{ background:{type:"solid",color:"#0d1117"}, textColor:"#8b98a8", fontSize:10 },
+    grid:{ vertLines:{color:"#1a212b"}, horzLines:{color:"#1a212b"} },
+    rightPriceScale:{ borderColor:"#232c38" },
+    timeScale:{ borderColor:"#232c38", visible:false,
+                tickMarkFormatter: (t, tt) => fmtAxis(t, false) },
+    localization:{ timeFormatter: fmtCrosshair },
+    crosshair:{ mode:LWC.CrosshairMode.Normal },
+    handleScroll:false, handleScale:false,
+  });
+  subCharts[key] = {chart: c, el: wrap};
+
+  // keep every pane scrolled in step with the price chart
+  chart.timeScale().subscribeVisibleLogicalRangeChange(r=>{
+    if(r) try{ c.timeScale().setVisibleLogicalRange(r); }catch{}
+  });
+  return c;
+}
+
+function drawIndicators(payload){
+  if(!payload){ clearIndicators(); return; }
+
+  const key = structureKey(payload);
+  if(key === drawnKey){
+    // Same indicators, same series - swap the data in place. This is the
+    // difference between a smooth chart and a flicker every poll.
+    for(const [id, spec] of Object.entries(payload)){
+      if(spec.error) continue;
+      for(const [name, pts] of Object.entries(spec.series)){
+        const s = indSeries[`${id}_${name}`];
+        if(s && pts.length) { try{ s.setData(pts); }catch{} }
+      }
+    }
+    return;
+  }
+
+  clearIndicators();
+  drawnKey = key;
+  for(const [id, spec] of Object.entries(payload)){
+    if(spec.error){ console.warn(id, spec.error); continue; }
+
+    if(spec.pane === "price"){
+      for(const [key, pts] of Object.entries(spec.series)){
+        if(!pts.length) continue;
+        const color = spec.colors[key] || "#8b98a8";
+        let opts = {color, lineWidth: key.includes("200") ? 2 : 1,
+                    priceLineVisible:false, lastValueVisible:false};
+        if(spec.style === "dots")
+          opts = {...opts, lineWidth:1, lineStyle:LWC.LineStyle.Dotted};
+        if(spec.style === "level"){
+          // Horizontal references, not curves. Only the levels you actually
+          // trade off get an axis tag - tagging all 25 makes the axis
+          // unreadable, which defeats the point of showing them.
+          const major = /^(OP|MLP|BSL|SSL|KTR[+-][12]|swing_|premium|discount|equilibrium|demand_|supply_)/.test(key);
+          opts = {...opts,
+                  lineWidth: /^(OP|BSL|SSL|swing_)/.test(key) ? 2 : 1,
+                  lineStyle: LWC.LineStyle.Dashed,
+                  lastValueVisible: major,
+                  title: major ? key.replace(/_/g," ") : ""};
+        }
+        const s = chart.addSeries(LWC.LineSeries, opts);
+        s.setData(pts.map(p=>({...p, time: shift(p.time)})));
+        indSeries[`${id}_${key}`] = s;
+      }
+      continue;
+    }
+
+    const h = spec.pane === "volume" ? 90 : 110;
+    const sub = subCharts[spec.pane]?.chart || makeSubPane(spec.pane, spec.label, h);
+
+    for(const [key, pts] of Object.entries(spec.series)){
+      if(!pts.length) continue;
+      const color = spec.colors[key] || "#8b98a8";
+      const isHist = (spec.histogram || []).includes(key);
+      const s = isHist
+        ? sub.addSeries(LWC.HistogramSeries, {color, priceLineVisible:false})
+        : sub.addSeries(LWC.LineSeries, {color, lineWidth:1, priceLineVisible:false});
+      s.setData(pts.map(p=>({...p, time: shift(p.time)})));
+      indSeries[`${id}_${key}`] = s;
+    }
+
+    (spec.bands || []).forEach(level=>{
+      const b = sub.addSeries(LWC.LineSeries, {color:"#3d4a5c", lineWidth:1,
+        lineStyle:LWC.LineStyle.Dashed, priceLineVisible:false, lastValueVisible:false});
+      const pts = Object.values(spec.series)[0];
+      if(pts?.length) b.setData([
+        {time: shift(pts[0].time), value: level},
+        {time: shift(pts.at(-1).time), value: level}]);
+    });
+
+    sub.timeScale().setVisibleLogicalRange(
+      chart.timeScale().getVisibleLogicalRange() || {from:0, to:300});
+  }
+}
+
+document.getElementById("indBtn").onclick = e=>{
+  e.stopPropagation();
+  document.getElementById("indPop").classList.toggle("open");
+};
+document.addEventListener("click", e=>{
+  const pop = document.getElementById("indPop");
+  if(pop.classList.contains("open") && !pop.contains(e.target)
+     && e.target.id !== "indBtn") pop.classList.remove("open");
+});
+
+// ---------- data providers ----------
+const DLABEL = {mt5:"MetaTrader 5", oanda:"OANDA", twelvedata:"Twelve Data",
+                yfinance:"Yahoo (futures proxy)", binance:"Binance"};
+let dpState = null;
+
+async function loadDataProviders(){
+  try{ dpState = await (await fetch(`${API}/data-providers`)).json(); }
+  catch{ return; }
+  renderDataProviders();
+}
+
+function renderDataProviders(){
+  const list = document.getElementById("dpList");
+  const chain = dpState.chains[symbol] || [];
+  document.getElementById("dpSym").textContent = symbol;
+
+  list.innerHTML = Object.entries(dpState.providers).map(([name, st])=>{
+    const ready = st === "ready";
+    const pos = chain.indexOf(name);
+    const active = pos === 0;
+    const cls = ["opt", ready ? "rdy" : "off", active ? "sel" : ""].join(" ");
+    const tag = active ? "active" : pos > 0 ? `fallback ${pos}` : ready ? "" : "not set up";
+    return `<div class="${cls}" data-dp="${name}">
+      <span class="dot"></span>${DLABEL[name]||name}<small>${tag}</small></div>`;
+  }).join("");
+
+  list.querySelectorAll(".opt.rdy").forEach(el=>{
+    el.onclick = async ()=>{
+      const pick = el.dataset.dp;
+      const rest = Object.entries(dpState.providers)
+        .filter(([n,st]) => st==="ready" && n!==pick).map(([n])=>n);
+      const r = await fetch(`${API}/data-providers`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({symbol, providers:[pick, ...rest]})});
+      if(!r.ok){ alert(await r.text()); return; }
+      dpState = await r.json();
+      renderDataProviders();
+      firstLoad = true; loadChart();
+    };
+  });
+}
+
+// ---------- providers ----------
+const LABELS = {anthropic:"Claude", gemini:"Gemini (free tier)", openai:"OpenAI", xai:"Grok", deepseek:"DeepSeek (cheap)"};
+let provState = null;
+
+async function loadProviders(){
+  try{
+    provState = await (await fetch(`${API}/providers`)).json();
+  }catch{ return; }
+  renderProviders();
+}
+
+function renderProviders(){
+  const s = provState, list = document.getElementById("provList");
+  const current = (s.chains.reasoning || [])[0];
+
+  list.innerHTML = Object.entries(s.providers).map(([name,st])=>{
+    const ready = st === "ready";
+    const cls = ["opt", ready?"rdy":"off", current===name && ready ? "sel":""].join(" ");
+    return `<div class="${cls}" data-prov="${name}" ${ready?"":"title='no API key set in .env'"}>
+      <span class="dot"></span>${LABELS[name]||name}
+      <small>${ready ? "" : "no key"}</small></div>`;
+  }).join("");
+
+  list.querySelectorAll(".opt.rdy").forEach(el=>{
+    el.onclick = ()=>pickProvider(el.dataset.prov);
+  });
+
+  const rv = document.getElementById("reviewOpt");
+  rv.classList.toggle("sel", s.review_enabled);
+  rv.classList.toggle("rdy", s.review_enabled);
+  document.getElementById("reviewState").textContent = s.review_enabled ? "on" : "off";
+
+  const c = document.getElementById("councilOpt");
+  c.classList.toggle("sel", s.council);
+  c.classList.toggle("rdy", s.council);
+  document.getElementById("councilState").textContent = s.council ? "on" : "off";
+
+  // header badge shows what is actually serving reasoning right now
+  const active = (s.roles.reasoning || [])[0];
+  const badge = document.getElementById("provBadge");
+  if(s.council){
+    badge.textContent = "ai: council";
+    badge.className = "badge live";
+  }else if(active){
+    badge.textContent = "ai: " + (LABELS[active.split("/")[0]] || active.split("/")[0]).split(" ")[0];
+    badge.className = "badge live";
+  }else{
+    badge.textContent = "ai: none";
+    badge.className = "badge fake";
+  }
+}
+
+async function post(body){
+  const r = await fetch(`${API}/providers`,{
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(body)});
+  if(!r.ok){ alert("Failed: " + await r.text()); return; }
+  provState = await r.json();
+  renderProviders();
+}
+
+function pickProvider(name){
+  // Chosen provider first, every other ready one behind it as failover.
+  const rest = Object.entries(provState.providers)
+    .filter(([n,st])=>st==="ready" && n!==name).map(([n])=>n);
+  const chain = [name, ...rest];
+  post({chains:{reasoning:chain, chat:chain, cheap:chain}});
+}
+
+document.getElementById("ttlSel").onchange = e=>{
+  try{ localStorage.setItem("ttl", e.target.value); }catch{}
+  setTTL(e.target.value);
+};
+try{
+  const savedTtl = localStorage.getItem("ttl");
+  if(savedTtl !== null){
+    document.getElementById("ttlSel").value = savedTtl;
+    setTTL(savedTtl);
+  }
+}catch{}
+
+document.getElementById("pollSel").value = String(pollSeconds);
+document.getElementById("pollSel").onchange = e=>{
+  pollSeconds = +e.target.value;
+  try{ localStorage.setItem("poll", pollSeconds); }catch{}
+  loadChart(); schedule(); loadQuota();
+};
+
+document.getElementById("tzSel").value = TZ;
+document.getElementById("tzSel").onchange = e=>{
+  TZ = e.target.value;
+  // Formatters close over TZ, so a redraw is enough - no refetch needed.
+  try{ chart.applyOptions({localization:{timeFormatter: fmtCrosshair}}); }catch{}
+  try{ localStorage.setItem("tz", TZ); }catch{}
+  firstLoad = true;
+  loadChart();
+  if(document.getElementById("p-news").classList.contains("on")) loadNews();
+  if(document.getElementById("p-events").classList.contains("on")) loadEvents();
+  document.getElementById("tzTag").textContent = tzLabel();
+};
+
+document.getElementById("cog").onclick = e=>{
+  e.stopPropagation();
+  document.getElementById("pop").classList.toggle("open");
+  loadProviders();
+  loadQuota();
+  loadDataProviders();
+};
+document.getElementById("provBadge").onclick = ()=>document.getElementById("cog").click();
+document.getElementById("councilOpt").onclick = ()=>post({council: !provState.council});
+document.getElementById("reviewOpt").onclick = ()=>post({review: !provState.review_enabled});
+document.getElementById("resetProv").onclick = async ()=>{
+  const r = await fetch(`${API}/providers`,{method:"DELETE"});
+  provState = await r.json(); renderProviders();
+};
+document.addEventListener("click", e=>{
+  const pop = document.getElementById("pop");
+  if(pop.classList.contains("open") && !pop.contains(e.target))
+    pop.classList.remove("open");
+});
+
+// ---------- mobile bottom sheet ----------
+const isMobile = () => window.matchMedia("(max-width: 900px)").matches;
+
+function initSheet(){
+  const aside = document.querySelector("aside");
+  if(!aside) return;
+
+  // A tab tap opens the sheet; tapping the active tab again closes it.
+  document.querySelectorAll(".tab").forEach(t=>{
+    t.addEventListener("click", ()=>{
+      if(!isMobile()) return;
+      if(aside.classList.contains("open") && t.classList.contains("on")){
+        aside.classList.remove("open");
+      }else{
+        aside.classList.add("open");
+      }
+      setTimeout(()=>{ try{ chart.timeScale().fitContent(); }catch{} }, 280);
+    });
+  });
+
+  // Drag the grip area to open or dismiss.
+  let startY = null;
+  aside.addEventListener("touchstart", e=>{
+    if(e.touches[0].clientY - aside.getBoundingClientRect().top < 46)
+      startY = e.touches[0].clientY;
+  }, {passive:true});
+  aside.addEventListener("touchmove", e=>{
+    if(startY === null) return;
+    const dy = e.touches[0].clientY - startY;
+    if(dy > 40){ aside.classList.remove("open"); startY = null; }
+    if(dy < -40){ aside.classList.add("open"); startY = null; }
+  }, {passive:true});
+  aside.addEventListener("touchend", ()=>{ startY = null; }, {passive:true});
+
+  // Typing should always reveal the conversation.
+  const inp = document.getElementById("inp");
+  if(inp) inp.addEventListener("focus", ()=>{
+    if(isMobile()) aside.classList.add("open");
+  });
+}
+
+// Chart height changes when the sheet moves or the device rotates.
+window.addEventListener("orientationchange", ()=>{
+  setTimeout(()=>{ try{ chart.timeScale().fitContent(); paintZones(); }catch{} }, 300);
+});
+
+// ---------- wiring ----------
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
+  document.querySelectorAll(".pane").forEach(x=>x.classList.remove("on"));
+  t.classList.add("on");
+  document.getElementById("p-"+t.dataset.p).classList.add("on");
+  if(t.dataset.p === "news"){
+    loadNews();
+    // Clear any "new items" badge on the tab
+    const nt = document.querySelector(".tab[data-p=\"news\"]");
+    if(nt) nt.innerHTML = "News";
+  }
+  if(t.dataset.p === "events") loadEvents();
+  if(t.dataset.p === "smc") loadSMC();
+});
+
+document.querySelectorAll("[data-preset]").forEach(b=>b.onclick=()=>preset(b.dataset.preset));
+document.getElementById("gen").onclick = generate;
+document.getElementById("reload").onclick = ()=>{ loadChart(); schedule(); };
+
+document.getElementById("auto").onclick = e=>{
+  autoOn = !autoOn;
+  e.target.textContent = autoOn ? "Auto ⏵" : "Auto ⏸";
+  e.target.classList.toggle("on", autoOn);
+  if(autoOn){ loadChart(); schedule(); } else clearTimeout(pollTimer);
+};
+
+document.getElementById("symSel").onchange = e=>{
+  symbol = e.target.value; firstLoad = true; lastClose = null;
+  lastHeavy = 0; drawnKey = null;
+  loadChart(); schedule();
+  if(document.getElementById("p-news").classList.contains("on")) loadNews();
+};
+
+
+function submit(){
+  const i = document.getElementById("inp");
+  if(!i.value.trim()) return;
+  const v = i.value; i.value = "";
+  document.querySelector('.tab[data-p="chat"]').click();
+  ask(v);
+}
+document.getElementById("send").onclick = submit;
+document.getElementById("inp").addEventListener("keydown", e=>{ if(e.key==="Enter") submit(); });
+
+document.getElementById("tzTag").textContent = tzLabel();
+checkBackend();
+initChart();
+initSheet();
+loadTimeframes();
+loadIndicatorCatalog();
+loadChart().then(schedule);
+loadProviders();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+.env
+*.env
+__pycache__/
+*.pyc
+.git/
+.gitignore
+venv/
+runtime_config.json
+event_dates.json
+data_routes.json
+check_*.py
+whereami.py
+setup_key.py
+test_offline.py
+README.md
