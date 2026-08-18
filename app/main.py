@@ -75,7 +75,7 @@ _STATIC = Path(__file__).resolve().parent.parent / "static"
 
 @app.get("/")
 def terminal():
-    """Serve the chart UI at https://terminal-ai.onrender.com/"""
+    """Serve the chart UI at http://localhost:8000/"""
     index = _STATIC / "index.html"
     if not index.exists():
         raise HTTPException(404, "static/index.html not found")
