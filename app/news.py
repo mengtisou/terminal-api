@@ -693,13 +693,15 @@ def feed_status() -> list[dict]:
         return list(pool.map(lambda f: probe(*f), FEEDS))
 
 
-def ingest(limit_per_feed: int = 12, max_tag: int = 8,
-           workers: int = 2, finnhub_first: bool = True) -> dict:
+def ingest(limit_per_feed: int = 12, max_tag: int = 24,
+           workers: int = 2, finnhub_first: bool = True,
+           tag_budget_s: float = 45.0) -> dict:
     """Pull every feed, then tag whatever is new.
 
-    Tagging is throttled in app/llm.py to respect per-minute provider caps, so
-    workers stays low deliberately - two parallel calls against an 8/min limit
-    is sustainable, six is not.
+    Tagging goes out in batches (see _tag_batch), so max_tag can be generous:
+    24 headlines is two model calls, not twenty-four. `workers` is accepted for
+    backwards compatibility and no longer used - parallelism bought nothing
+    against a global per-provider throttle.
     """
     pruned = prune_old()
 
@@ -739,18 +741,29 @@ def ingest(limit_per_feed: int = 12, max_tag: int = 8,
     batch_to_tag = candidates[:max_tag]
     tagged, tag_errors = 0, 0
     if batch_to_tag:
-        def work(item):
-            try:
-                return tag_article(item["title"], item.get("summary", ""),
-                                   item.get("source", ""), item.get("url", ""),
-                                   _iso(item.get("published")))
-            except Exception as e:
-                log.warning("tagging worker failed: %s", e)
-                return None
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            results = list(pool.map(work, batch_to_tag))
-        tagged = sum(1 for r in results if r)
-        tag_errors = sum(1 for r in results if r is None)
+        # Batched, for the same reason fetch_live is: the throttle spaces calls
+        # ~7.5s apart under a global lock, so N separate calls take N*7.5s no
+        # matter how many workers you give them. Eight articles could not
+        # finish inside the browser's two-minute abort; two batches can.
+        #
+        # store_raw put these in _STORE already, and _tag_batch mutates in
+        # place - so tagging the stored dict upgrades what the panel reads.
+        stored, missing = [], 0
+        for i in batch_to_tag:
+            s = _STORE.get(_fingerprint(i["title"]))
+            if s:
+                stored.append(s)
+            else:
+                missing += 1
+
+        deadline = _time.monotonic() + tag_budget_s
+        for start in range(0, len(stored), TAG_BATCH_SIZE):
+            if _time.monotonic() > deadline:
+                log.info("ingest: tag budget spent, %d headlines stay on rules",
+                         len(stored) - start)
+                break
+            tagged += _tag_batch(stored[start:start + TAG_BATCH_SIZE])
+        tag_errors = len(stored) - tagged + missing
 
     fetched = sum(len(b) for b in batches)
     return {
@@ -834,14 +847,23 @@ def ingest_marketaux(symbols: str = "XAUUSD,GLD,USO,BTC") -> dict:
 
 
 def ingest_finnhub_all() -> dict:
-    """Pull all Finnhub categories and store everything."""
+    """Pull all Finnhub categories and store everything.
+
+    Concurrently: three categories at a 20s timeout each ran up to a minute
+    serially, which on its own could eat half the browser's patience before a
+    single headline was tagged. These are independent HTTP calls with no shared
+    rate limit, so there is no reason to queue them.
+    """
     if not FINNHUB_KEY:
         return {"error": "FINNHUB_KEY not set", "stored": 0}
-    total = 0
-    for cat in FINNHUB_CATEGORIES:
-        r = ingest_finnhub(cat)
-        total += r.get("stored", 0)
-    return {"stored": total, "source": "finnhub"}
+    with ThreadPoolExecutor(max_workers=len(FINNHUB_CATEGORIES)) as pool:
+        results = list(pool.map(ingest_finnhub, FINNHUB_CATEGORIES))
+    total = sum(r.get("stored", 0) for r in results)
+    errors = [r["error"] for r in results if r.get("error")]
+    out = {"stored": total, "source": "finnhub"}
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 def ingest_finnhub(category: str = "general") -> dict:
@@ -850,7 +872,7 @@ def ingest_finnhub(category: str = "general") -> dict:
         return {"error": "FINNHUB_KEY not set"}
     try:
         r = httpx.get("https://finnhub.io/api/v1/news",
-                      params={"category": category, "token": FINNHUB_KEY}, timeout=20)
+                      params={"category": category, "token": FINNHUB_KEY}, timeout=12)
         r.raise_for_status()
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}", "stored": 0}

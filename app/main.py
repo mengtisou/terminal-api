@@ -838,7 +838,7 @@ def news_tag(limit: int = 8):
 
 
 @app.post("/news/ingest")
-def news_ingest(max_tag: int = 8):
+def news_ingest(max_tag: int = 24):
     """Pull every configured source, then score what is worth scoring.
 
     APIs run first when configured - they are faster and better structured than
