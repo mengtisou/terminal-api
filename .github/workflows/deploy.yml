@@ -2,8 +2,8 @@ name: Deploy to Hetzner
 
 on:
   push:
-    branches: [main]          # auto-deploys every time you push to main
-  workflow_dispatch:          # manual trigger from GitHub Actions tab
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -18,17 +18,10 @@ jobs:
           port: 22
           script: |
             set -e
-            echo "=== Pulling latest code ==="
-            cd /root/zoqira-ai
+            cd /root/terminal-api
             git pull origin main
-
-            echo "=== Installing new packages (if any) ==="
             grep -v -i "MetaTrader5" requirements.txt > /tmp/req.txt
             pip3 install -r /tmp/req.txt --break-system-packages -q
-
-            echo "=== Restarting service ==="
             supervisorctl restart zoqira
-
-            echo "=== Health check ==="
             sleep 5
-            curl -sf https://terminal-api-two.vercel.app/?api=https://api.realflylink.com/health > /dev/null && echo "OK" || echo "FAILED - check logs"
+            curl -sf http://localhost:8000/health > /dev/null && echo "OK" || echo "FAILED"
