@@ -492,10 +492,33 @@ window.fetch = (input, init = {}) => {
 // ---------- session clock ----------
 // FX and metals: Sunday 17:00 ET to Friday 17:00 ET. Crypto never closes.
 async function checkBackend(){
+  // Show a friendly "waking up" message while we wait - Render free tier
+  // sleeps after 15 min and takes up to 60s to wake. Without this the user
+  // just sees a blank page and thinks something is broken.
+  const overlay = document.createElement("div");
+  overlay.id = "wakeOverlay";
+  overlay.style.cssText = "position:fixed;inset:0;z-index:999;background:var(--bg);" +
+    "display:flex;align-items:center;justify-content:center;padding:24px;flex-direction:column;gap:16px";
+  overlay.innerHTML = `
+    <div style="font-size:17px;font-weight:600">Connecting to backend…</div>
+    <div style="color:var(--muted);font-size:13px;text-align:center;line-height:1.7">
+      <code style="color:var(--accent)">${API}</code><br><br>
+      If the server was idle it may take up to 60 seconds to wake.<br>
+      Please wait…
+    </div>
+    <div id="wakeTimer" style="color:var(--dim);font-size:12px">0s</div>`;
+  document.body.appendChild(overlay);
+
+  const start = Date.now();
+  const ticker = setInterval(()=>{
+    const el = document.getElementById("wakeTimer");
+    if(el) el.textContent = Math.round((Date.now()-start)/1000) + "s";
+  }, 1000);
+
   try{
-    // Free hosting tiers sleep when idle and can take ~50s to wake, so allow
-    // for that before declaring the backend unreachable.
-    const r = await fetch(`${API}/health`, {signal: AbortSignal.timeout(60000)});
+    const r = await fetch(`${API}/health`, {signal: AbortSignal.timeout(90000)});
+    clearInterval(ticker);
+    overlay.remove();
     if(!r.ok) throw new Error("bad status");
     const h = await r.json();
     if(h.auth_required && !ACCESS_KEY){
@@ -513,24 +536,26 @@ async function checkBackend(){
       return false;
     }
     return true;
-  }catch{
-    document.body.insertAdjacentHTML("afterbegin", `
-      <div style="position:fixed;inset:0;z-index:999;background:var(--bg);
-                  display:flex;align-items:center;justify-content:center;padding:24px">
-        <div style="max-width:460px;text-align:center">
-          <div style="font-size:17px;font-weight:600;margin-bottom:10px">
-            Cannot reach the backend</div>
-          <div style="color:var(--muted);font-size:13px;line-height:1.6">
-            Tried <code style="color:var(--accent)">${API}</code><br><br>
-            If you are running it locally, start the server:<br>
-            <code style="color:var(--accent)">python -m uvicorn app.main:app --reload</code>
-            <br><br>
-            If the backend is somewhere else, add it to the URL:<br>
-            <code style="color:var(--accent)">?api=https://your-backend.example.com</code>
-          </div>
-          <button onclick="location.reload()" style="margin-top:18px">Retry</button>
+  }catch(e){
+    clearInterval(ticker);
+    overlay.innerHTML = `
+      <div style="max-width:460px;text-align:center">
+        <div style="font-size:17px;font-weight:600;margin-bottom:10px">Cannot reach the backend</div>
+        <div style="color:var(--muted);font-size:13px;line-height:1.7">
+          Tried <code style="color:var(--accent)">${API}</code><br><br>
+          Make sure the Render service is running, then retry.
         </div>
-      </div>`);
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:18px">
+          <button onclick="location.reload()">Retry</button>
+          <button onclick="localStorage.removeItem('apiBase');location.href=location.pathname"
+            style="background:transparent;color:var(--muted);border-color:var(--line)">
+            Clear saved URL</button>
+        </div>
+        <div style="color:var(--dim);font-size:11px;margin-top:14px">
+          <a href="${API}/health" target="_blank" style="color:var(--accent)">
+            Test backend directly ↗</a>
+        </div>
+      </div>`;
     return false;
   }
 }
