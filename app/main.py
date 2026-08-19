@@ -704,6 +704,26 @@ def news_clear():
     return clear_store()
 
 
+@app.get("/news/latest")
+def news_latest(symbol: str = "XAUUSD", since: str | None = None):
+    """Poll for headlines newer than `since` (ISO timestamp).
+
+    The frontend polls this every 60s. Only fresh articles are returned, so the
+    response is tiny when nothing is new and the page updates automatically.
+    """
+    from .news import feed, relevant_news
+    import datetime as dt
+    items = feed(symbol, limit=60)
+    if since:
+        try:
+            cutoff = dt.datetime.fromisoformat(since)
+            items = [i for i in items
+                     if dt.datetime.fromisoformat(i["published_at"]) > cutoff]
+        except (ValueError, KeyError):
+            pass
+    return {"items": items, "count": len(items)}
+
+
 @app.post("/news/tag")
 def news_tag(limit: int = 8):
     """Score headlines that were stored but not yet tagged."""
