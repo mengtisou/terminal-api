@@ -493,71 +493,43 @@ window.fetch = (input, init = {}) => {
 
 // ---------- session clock ----------
 // FX and metals: Sunday 17:00 ET to Friday 17:00 ET. Crypto never closes.
-async function checkBackend(){
-  // Show a friendly "waking up" message while we wait - Render free tier
-  // sleeps after 15 min and takes up to 60s to wake. Without this the user
-  // just sees a blank page and thinks something is broken.
-  const overlay = document.createElement("div");
-  overlay.id = "wakeOverlay";
-  overlay.style.cssText = "position:fixed;inset:0;z-index:999;background:var(--bg);" +
-    "display:flex;align-items:center;justify-content:center;padding:24px;flex-direction:column;gap:16px";
-  overlay.innerHTML = `
-    <div style="font-size:17px;font-weight:600">Connecting to backend…</div>
-    <div style="color:var(--muted);font-size:13px;text-align:center;line-height:1.7">
-      <code style="color:var(--accent)">${API}</code><br><br>
-      If the server was idle it may take up to 60 seconds to wake.<br>
-      Please wait…
-    </div>
-    <div id="wakeTimer" style="color:var(--dim);font-size:12px">0s</div>`;
-  document.body.appendChild(overlay);
-
-  const start = Date.now();
-  const ticker = setInterval(()=>{
-    const el = document.getElementById("wakeTimer");
-    if(el) el.textContent = Math.round((Date.now()-start)/1000) + "s";
-  }, 1000);
+async function checkBackend(retryCount = 0){
+  // A small status pill instead of a full-screen overlay. Covering the whole
+  // page and recreating it on each retry looked like the page was reloading.
+  let pill = document.getElementById("connPill");
+  if(!pill){
+    pill = document.createElement("div");
+    pill.id = "connPill";
+    pill.style.cssText = "position:fixed;bottom:14px;left:14px;z-index:999;"
+      + "background:var(--panel);border:1px solid var(--line);border-radius:20px;"
+      + "padding:7px 14px;font-size:12px;color:var(--muted);"
+      + "box-shadow:0 4px 14px rgba(0,0,0,.4);display:flex;align-items:center;gap:8px";
+    document.body.appendChild(pill);
+  }
+  pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;
+    background:var(--warn);display:inline-block"></span>Connecting…`;
 
   try{
-    const r = await fetch(`${API}/health`, {signal: AbortSignal.timeout(90000)});
-    clearInterval(ticker);
-    overlay.remove();
+    const r = await fetch(`${API}/health`, {signal: AbortSignal.timeout(15000)});
     if(!r.ok) throw new Error("bad status");
-    const h = await r.json();
-    if(h.auth_required && !ACCESS_KEY){
-      document.body.insertAdjacentHTML("afterbegin", `
-        <div style="position:fixed;inset:0;z-index:999;background:var(--bg);
-                    display:flex;align-items:center;justify-content:center;padding:24px">
-          <div style="max-width:420px;text-align:center">
-            <div style="font-size:17px;font-weight:600;margin-bottom:10px">Access key required</div>
-            <div style="color:var(--muted);font-size:13px;line-height:1.6">
-              This backend is protected. Add your key to the URL once:<br><br>
-              <code style="color:var(--accent)">?key=YOUR-ACCESS-KEY</code>
-            </div>
-          </div>
-        </div>`);
-      return false;
-    }
+    pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;
+      background:var(--up);display:inline-block"></span>Connected`;
+    setTimeout(()=>pill.remove(), 1500);
     return true;
   }catch(e){
-    clearInterval(ticker);
-    overlay.innerHTML = `
-      <div style="max-width:460px;text-align:center">
-        <div style="font-size:17px;font-weight:600;margin-bottom:10px">Cannot reach the backend</div>
-        <div style="color:var(--muted);font-size:13px;line-height:1.7">
-          Tried <code style="color:var(--accent)">${API}</code><br><br>
-          Make sure the Render service is running, then retry.
-        </div>
-        <div style="display:flex;gap:10px;justify-content:center;margin-top:18px">
-          <button onclick="location.reload()">Retry</button>
-          <button onclick="localStorage.removeItem('apiBase');location.href=location.pathname"
-            style="background:transparent;color:var(--muted);border-color:var(--line)">
-            Clear saved URL</button>
-        </div>
-        <div style="color:var(--dim);font-size:11px;margin-top:14px">
-          <a href="${API}/health" target="_blank" style="color:var(--accent)">
-            Test backend directly ↗</a>
-        </div>
-      </div>`;
+    if(retryCount < 2){
+      pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;
+        background:var(--warn);display:inline-block"></span>Retrying ${retryCount+1}/2…`;
+      await new Promise(r => setTimeout(r, 2500));
+      return checkBackend(retryCount + 1);
+    }
+    pill.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;
+        background:var(--danger);display:inline-block"></span>
+      Backend unreachable
+      <a href="${API}/health" target="_blank" style="color:var(--accent);margin-left:4px">test ↗</a>`;
+    return false;
+  }
+}
     return false;
   }
 }
@@ -786,17 +758,20 @@ async function loadPrice(){
     const r = await fetch(`${API}/price/${symbol}?timeframe=${timeframe}`);
     if(!r.ok) return;
     const d = await r.json();
-    const priceEl = document.getElementById("price");
+    const priceEl = document.getElementById("px");
     if(priceEl && d.price){
       const prev = parseFloat(priceEl.textContent.replace(/,/g,"")) || 0;
-      priceEl.textContent = d.price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-      priceEl.style.color = d.price > prev ? "var(--up)" : d.price < prev ? "var(--down)" : "";
+      priceEl.textContent = d.price.toLocaleString("en-US",
+        {minimumFractionDigits:2, maximumFractionDigits:2});
+      if(prev && d.price !== prev){
+        priceEl.style.color = d.price > prev ? "var(--up)" : "var(--down)";
+        setTimeout(()=>{ priceEl.style.color = ""; }, 600);
+      }
+      // Show the spread on hover when we have a real tick
+      if(d.bid && d.ask) priceEl.title = `bid ${d.bid} / ask ${d.ask} · spread ${d.spread}`;
     }
     const agoEl = document.getElementById("ago");
-    if(agoEl) agoEl.textContent = "live";
-    const srcEl = document.getElementById("src");
-    if(srcEl && d.data_source) srcEl.textContent = d.data_source;
-    marketOpen = true;
+    if(agoEl) agoEl.textContent = d.live ? "live" : "0s ago";
   }catch{}
 }
 
@@ -2037,13 +2012,26 @@ document.getElementById("send").onclick = submit;
 document.getElementById("inp").addEventListener("keydown", e=>{ if(e.key==="Enter") submit(); });
 
 document.getElementById("tzTag").textContent = tzLabel();
-checkBackend();
-initChart();
-initSheet();
-loadTimeframes();
-loadIndicatorCatalog();
-loadChart().then(()=>{ schedule(); schedulePrice(); });
-loadProviders();
+
+// Init in the right order - check backend first, then start everything.
+// Not awaiting checkBackend was the cause of the reload loop: loadChart
+// would fire before the backend was confirmed reachable, fail silently,
+// and schedule() would retry every second creating a visible flicker.
+(async () => {
+  initChart();
+  initSheet();
+  loadTimeframes();
+  loadIndicatorCatalog();
+
+  const ok = await checkBackend();
+  if(!ok) return;   // backend unreachable - overlay stays, nothing else starts
+
+  await loadChart();
+  schedule();
+  schedulePrice();
+  loadProviders();
+  loadDashboard();
+})();
 
 // --- news button wiring ---
 const _pullBtn = document.getElementById("pullNews");

@@ -355,12 +355,54 @@ def indicators_list():
 
 @app.get("/price/{symbol}")
 def price_tick(symbol: str, timeframe: str = "5m"):
-    """Latest price only — no indicators, no heavy computation.
+    """Live price — the current tradeable quote, not the last candle.
 
-    Called every second for the live price display. Indicators are fetched
-    separately on a slower schedule since they only change on candle close.
-    Returns in <50ms from cache when OANDA data is warm.
+    Tries the provider's dedicated pricing endpoint first (OANDA /pricing,
+    MT5 symbol_info_tick). These update continuously between candle closes,
+    which is what makes the display genuinely real-time. Falls back to the
+    last candle close when no tick endpoint is available.
     """
+    from .market import PROVIDERS, _configured, chain_for
+
+    # Try a real tick feed first
+    for name in chain_for(symbol):
+        if not _configured(name):
+            continue
+        prov = PROVIDERS.get(name)
+
+        if name == "oanda" and hasattr(prov, "live_price"):
+            tick = prov.live_price(symbol)
+            if tick:
+                return {
+                    "symbol": symbol.upper(),
+                    "data_source": "oanda:tick",
+                    "price": tick["mid"],
+                    "bid": tick["bid"],
+                    "ask": tick["ask"],
+                    "spread": tick["spread"],
+                    "time": tick["time"],
+                    "tradeable": tick["tradeable"],
+                    "live": True,
+                }
+
+        if name == "mt5":
+            try:
+                from .mt5_provider import live_tick
+                t = live_tick(symbol)
+                if t:
+                    return {
+                        "symbol": symbol.upper(),
+                        "data_source": "mt5:tick",
+                        "price": round((t["bid"] + t["ask"]) / 2, 5),
+                        "bid": t["bid"], "ask": t["ask"],
+                        "spread": t["spread"], "time": t["at"],
+                        "live": True,
+                    }
+            except Exception:
+                pass
+        break   # only try the primary provider for ticks
+
+    # Fallback: last candle close
     try:
         df, source = get_candles(symbol, timeframe, 2)
     except DataUnavailable as e:
@@ -376,13 +418,10 @@ def price_tick(symbol: str, timeframe: str = "5m"):
         "timeframe": timeframe,
         "data_source": source,
         "price": round(close, 5),
-        "open": round(float(last["open"]), 5),
-        "high": round(float(last["high"]), 5),
-        "low": round(float(last["low"]), 5),
-        "close": round(close, 5),
         "change": round(close - prev_close, 5),
         "change_pct": round((close - prev_close) / prev_close * 100, 3),
         "time": last.name.isoformat(),
+        "live": False,
     }
 
 

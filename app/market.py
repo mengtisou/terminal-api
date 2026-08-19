@@ -283,6 +283,45 @@ class OandaProvider:
     SYMBOLS = {"XAUUSD": "XAU_USD", "XAGUSD": "XAG_USD", "EURUSD": "EUR_USD",
                "GBPUSD": "GBP_USD", "USDJPY": "USD_JPY", "USOIL": "WTICO_USD"}
 
+    def live_price(self, symbol: str) -> dict | None:
+        """Current bid/ask from OANDA's pricing endpoint.
+
+        This is the RIGHT endpoint for real-time price - it returns the
+        current tradeable quote, not the last completed candle. Candles
+        only update on close; this updates continuously.
+        """
+        instrument = self.SYMBOLS.get(symbol.upper(), symbol)
+        base = OANDA_BASE.rstrip("/").removesuffix("/v3")
+        account = os.getenv("OANDA_ACCOUNT", "")
+        if not account:
+            return None
+        try:
+            r = httpx.get(
+                f"{base}/v3/accounts/{account}/pricing",
+                headers={"Authorization": f"Bearer {OANDA_TOKEN}"},
+                params={"instruments": instrument},
+                timeout=8,
+            )
+            r.raise_for_status()
+            prices = r.json().get("prices", [])
+            if not prices:
+                return None
+            p = prices[0]
+            bid = float(p["bids"][0]["price"]) if p.get("bids") else None
+            ask = float(p["asks"][0]["price"]) if p.get("asks") else None
+            if bid is None or ask is None:
+                return None
+            return {
+                "bid": bid, "ask": ask,
+                "mid": round((bid + ask) / 2, 5),
+                "spread": round(ask - bid, 5),
+                "time": p.get("time"),
+                "tradeable": p.get("tradeable", True),
+            }
+        except Exception as e:
+            log.debug("oanda live price failed: %s", e)
+            return None
+
     def fetch(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         instrument = self.SYMBOLS.get(symbol.upper(), symbol)
         # Strip /v3 suffix if the user included it in OANDA_BASE already.
