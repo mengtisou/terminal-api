@@ -676,6 +676,18 @@ def news_poll(since: str | None = None, symbol: str = "XAUUSD"):
     }
 
 
+@app.get("/news/live")
+def news_live(symbol: str = "XAUUSD", limit: int = 30):
+    """Fetch and score headlines in one request, storing nothing.
+
+    Use this when the backend runs somewhere without persistent memory -
+    serverless platforms give every request a fresh process, so the cached
+    store is always empty there.
+    """
+    from .news import fetch_live
+    return fetch_live(symbol, limit)
+
+
 @app.get("/news/feeds")
 def news_feeds():
     """Per-feed reachability. Run this when the news panel comes back empty.
