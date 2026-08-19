@@ -353,6 +353,39 @@ def indicators_list():
     return {"indicators": indicator_catalog()}
 
 
+@app.get("/price/{symbol}")
+def price_tick(symbol: str, timeframe: str = "5m"):
+    """Latest price only — no indicators, no heavy computation.
+
+    Called every second for the live price display. Indicators are fetched
+    separately on a slower schedule since they only change on candle close.
+    Returns in <50ms from cache when OANDA data is warm.
+    """
+    try:
+        df, source = get_candles(symbol, timeframe, 2)
+    except DataUnavailable as e:
+        raise HTTPException(503, str(e))
+
+    last = df.iloc[-1]
+    prev = df.iloc[-2] if len(df) > 1 else last
+    close = float(last["close"])
+    prev_close = float(prev["close"])
+
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "data_source": source,
+        "price": round(close, 5),
+        "open": round(float(last["open"]), 5),
+        "high": round(float(last["high"]), 5),
+        "low": round(float(last["low"]), 5),
+        "close": round(close, 5),
+        "change": round(close - prev_close, 5),
+        "change_pct": round((close - prev_close) / prev_close * 100, 3),
+        "time": last.name.isoformat(),
+    }
+
+
 @app.get("/candles/{symbol}")
 def candles(symbol: str, timeframe: str = "15m", limit: int = 300,
             indicators: str = "ema", candle_mode: str = "off"):
@@ -410,6 +443,28 @@ def candles(symbol: str, timeframe: str = "15m", limit: int = 300,
     a = float(atr(df).iloc[-1])
     levels = structure(df, a)
     wanted = [x.strip() for x in indicators.split(",") if x.strip()]
+
+    # For unlimited providers (OANDA, MT5), start a background refresh so
+    # the NEXT request gets fresh data without waiting for a network round-trip.
+    # This is what makes 1-second refresh feel genuinely real-time.
+    from .cache import UNMETERED
+    if source.split(":")[0] in UNMETERED:
+        import threading
+        def _prefetch():
+            try:
+                from .cache import _cache, _lock
+                import datetime as _dt
+                with _lock:
+                    entry = _cache.get((symbol.upper(), timeframe))
+                    if entry:
+                        stored, _df, _src = entry
+                        age = (_dt.datetime.now(_dt.timezone.utc) - stored).total_seconds()
+                        if age < 1:  # only if we just refreshed
+                            return
+                get_candles(symbol, timeframe, limit)
+            except Exception:
+                pass
+        threading.Thread(target=_prefetch, daemon=True).start()
 
     return {
         "symbol": symbol.upper(),

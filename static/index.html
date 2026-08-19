@@ -167,15 +167,17 @@
   .zone{background:#0f151d;border:1px solid var(--line);border-left-width:3px;
         border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:11.5px}
   .zone.dem{border-left-color:var(--up)} .zone.sup{border-left-color:var(--down)}
-  .news-item{padding:12px 0;border-bottom:1px solid var(--line)}
+  .news-item{padding:13px 0;border-bottom:1px solid var(--line)}
   .news-item:last-child{border-bottom:0}
-  .news-head{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+  .news-head{display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:nowrap;overflow:hidden}
+  .news-src{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .news-time{font-size:10px;color:var(--dim);margin-left:auto;white-space:nowrap;flex-shrink:0}
   .imp{font-size:9px;font-weight:600;letter-spacing:.7px;padding:2px 6px;border-radius:3px;text-transform:uppercase}
   .imp.high{background:#3d1418;color:#f5827f}
   .imp.medium{background:#3a2c0c;color:#f0b84a}
   .imp.low{background:#1c242f;color:var(--muted)}
   .news-title{font-size:13px;line-height:1.45;font-weight:500;margin-bottom:7px}
-  .news-title a{color:var(--text);text-decoration:none}
+  .news-title a{color:var(--text);text-decoration:none;display:block}
   .news-title a:hover{color:var(--accent)}
   .tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
   .tag{font-size:10px;padding:2px 6px;border-radius:3px;background:#131a23;color:var(--dim)}
@@ -185,7 +187,7 @@
   .meta{font-size:10px;color:var(--dim);margin-top:6px}
   .senti{display:flex;align-items:center;gap:9px;padding:9px 11px;background:#0f151d;border:1px solid var(--line);border-radius:7px;margin-bottom:12px;font-size:12px}
   .senti b{font-size:13px}
-  .pop{position:absolute;top:46px;right:14px;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;width:330px;box-shadow:0 10px 34px rgba(0,0,0,.6);display:none}
+  .pop{position:fixed;top:52px;right:14px;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;width:330px;box-shadow:0 10px 34px rgba(0,0,0,.6);display:none;max-height:calc(100dvh - 70px);overflow-y:auto;overscroll-behavior:contain}
   .pop.open{display:block}
   .pop h4{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);font-weight:600;margin:14px 0 7px}
   .pop h4:first-child{margin-top:0}
@@ -392,7 +394,7 @@
 
     <div class="pane" id="p-news">
       <div style="position:sticky;top:0;z-index:15;background:var(--panel);
-                  padding:12px 0 10px;margin:-14px 0 4px;border-bottom:1px solid var(--line)">
+                  padding:12px 0 8px;margin:-14px 0 0;border-bottom:1px solid var(--line)">
         <div style="display:flex;gap:7px;margin-bottom:7px">
           <button id="refreshNews" style="flex:1;font-size:12px">Refresh feed</button>
           <button id="pullNews" style="flex:1;font-size:12px">Pull latest news</button>
@@ -405,7 +407,7 @@
           <button data-imp="high" style="flex:1">High only</button>
         </div>
       </div>
-      <div id="newsOut"><div class="empty">Tap "Pull latest news" to fetch and tag headlines.</div></div>
+      <div id="newsOut" style="padding-top:10px"><div class="empty">Tap "Pull latest news" to fetch and tag headlines.</div></div>
     </div>
 
     <div class="pane" id="p-events">
@@ -778,6 +780,26 @@ function addLine(price,color,title,style=LWC.LineStyle.Dashed,width=1){
 let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
 let lastHeavy = 0;
 
+// Fast price update — just the latest tick, no indicators, returns in <50ms
+async function loadPrice(){
+  try{
+    const r = await fetch(`${API}/price/${symbol}?timeframe=${timeframe}`);
+    if(!r.ok) return;
+    const d = await r.json();
+    const priceEl = document.getElementById("price");
+    if(priceEl && d.price){
+      const prev = parseFloat(priceEl.textContent.replace(/,/g,"")) || 0;
+      priceEl.textContent = d.price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+      priceEl.style.color = d.price > prev ? "var(--up)" : d.price < prev ? "var(--down)" : "";
+    }
+    const agoEl = document.getElementById("ago");
+    if(agoEl) agoEl.textContent = "live";
+    const srcEl = document.getElementById("src");
+    if(srcEl && d.data_source) srcEl.textContent = d.data_source;
+    marketOpen = true;
+  }catch{}
+}
+
 async function loadChart(){
   let d;
   try{
@@ -868,7 +890,7 @@ async function loadChart(){
   // Zones and dashboard change on candle close, not tick by tick. Refetching
   // them every 3 seconds was three extra round trips per poll for no benefit.
   const now = Date.now();
-  if(now - lastHeavy > 30000){
+  if(now - lastHeavy > 60000){
     lastHeavy = now;
     loadOverlay();
     loadDashboard();
@@ -883,21 +905,29 @@ let autoOn = true, pollTimer = null;
 let pollSeconds = 1;
 try{ pollSeconds = +(localStorage.getItem("poll") || 1); }catch{}
 
+let pricePollTimer = null;
+
 function schedule(){
   clearTimeout(pollTimer);
   if(!autoOn) return;
-  // Nothing changes while the market is shut, and a hidden tab does not need
-  // updating at all - both are free savings on a metered provider.
   const hidden = document.hidden;
-  // When closed or hidden, back off aggressively to save quota on Hetzner too.
-  const wait = hidden ? 300000
-             : !marketOpen ? 60000
-             : pollSeconds * 1000;
+  const wait = hidden ? 300000 : !marketOpen ? 60000 : pollSeconds * 1000;
   pollTimer = setTimeout(async ()=>{ await loadChart(); schedule(); }, wait);
 }
 
+// Fast price ticker — updates every second using the lightweight /price endpoint.
+// Full candle reload happens on the slower schedule above.
+function schedulePrice(){
+  clearTimeout(pricePollTimer);
+  if(!autoOn || !marketOpen) return;
+  pricePollTimer = setTimeout(async ()=>{
+    await loadPrice();
+    schedulePrice();
+  }, 1000);
+}
+
 document.addEventListener("visibilitychange", ()=>{
-  if(!document.hidden && autoOn){ loadChart(); }
+  if(!document.hidden && autoOn){ loadChart(); schedulePrice(); }
   schedule();
 });
 
@@ -1177,6 +1207,319 @@ async function autoRefreshNews(){
 
 function startNewsAuto(){ newsAutoTimer = setInterval(autoRefreshNews, 60000); }
 function stopNewsAuto(){ if(newsAutoTimer){ clearInterval(newsAutoTimer); newsAutoTimer = null; } }
+
+async function loadNews(){
+  const out = document.getElementById("newsOut");
+  if(!out) return;
+  try{
+    let d;
+    try{
+      d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=60`)).json();
+    }catch{
+      d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json();
+    }
+    if(!d || !d.items || !d.items.length){
+      try{ d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json(); }catch{}
+    }
+
+    const RANK = {low:1, medium:2, high:3};
+    let items = (d && d.items) || [];
+    if(newsFilter === "scored") items = items.filter(i => i.tagged || i.scored_by);
+    if(newsFilter === "medium") items = items.filter(i => RANK[i.impact] >= 2);
+    if(newsFilter === "high")   items = items.filter(i => i.impact === "high");
+
+    items.sort((a,b)=> (RANK[b.impact]||1)-(RANK[a.impact]||1) ||
+      (new Date(b.published_at)-new Date(a.published_at)));
+    items = items.slice(0,30);
+    if(items.length) lastNewsTs = items[0].published_at;
+
+    if(!items.length){
+      out.innerHTML = `<div class="empty">No headlines yet.<br>Tap "Pull latest news".</div>`;
+      return;
+    }
+
+    const sent = (d && d.sentiment) || {};
+    const sentCol = sent.label==="bullish"?"var(--up)":sent.label==="bearish"?"var(--down)":"var(--muted)";
+    let html = `<div style="display:flex;justify-content:space-between;align-items:center;
+      font-size:11px;color:var(--dim);padding-bottom:10px;margin-bottom:10px;
+      border-bottom:1px solid var(--line)">
+      <span>gold sentiment <b style="color:${sentCol}">${sent.label||"neutral"}</b></span>
+      <span style="text-align:right">${sent.articles||items.length} stories${sent.high_impact
+        ?" · <b style='color:var(--warn)'>"+sent.high_impact+" high</b>":""}</span>
+    </div>`;
+
+    html += items.map(i=>{
+      const scored = i.tagged || i.scored_by;
+      const assets = i.assets || {};
+      const tags = scored
+        ? Object.entries(assets).map(([k,v])=>{
+            const [c,arrow] = DIR[v]||DIR.neutral;
+            return `<span class="tag">${k}<b class="${c}">${arrow} ${v}</b></span>`;
+          }).join("")+(i.scored_by==="rules"
+            ?`<span class="tag" style="color:var(--dim)" title="keyword rules">rules</span>`:"")
+        : `<span class="tag" style="color:var(--dim)">no signal</span>`;
+      const ms = Date.now()-new Date(i.published_at).getTime();
+      const s2 = Math.floor(ms/1000);
+      const t = s2<60?"just now":s2<3600?Math.floor(s2/60)+"m ago":s2<86400?Math.floor(s2/3600)+"h ago":Math.floor(s2/86400)+"d ago";
+      return `<div class="news-item">
+        <div class="news-head">
+          <span class="imp ${i.impact}">${i.impact}</span>
+          <span class="news-src">${i.source||""}</span>
+          <span class="news-time" title="${i.published_at}">${t}</span>
+        </div>
+        <div class="news-title">${i.url
+          ? `<a href="${i.url}" target="_blank">${i.title}</a>`
+          : i.title}</div>
+        <div class="tags">${tags}</div>
+        ${i.takeaway?`<div class="take"><span>⚡</span><span>${i.takeaway}</span></div>`:""}
+      </div>`;
+    }).join("");
+    out.innerHTML = html;
+  }catch(e){ out.innerHTML = `<div class="warn">${e.message}</div>`; }
+}
+
+async function pullNews(){
+  const btn = document.getElementById("pullNews");
+  const out = document.getElementById("newsOut");
+  if(!btn||!out) return;
+  btn.disabled = true; btn.textContent = "Fetching…";
+  out.innerHTML = `<div class="empty">Reading feeds… usually 10–20 seconds.</div>`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 120000);
+  try{
+    let r;
+    try{
+      const res = await fetch(`${API}/news/ingest`,{method:"POST",signal:ctrl.signal});
+      if(!res.ok) throw new Error("status "+res.status);
+      r = await res.json();
+    }catch(e){
+      if(e.name==="AbortError") throw e;
+      await loadNews();
+      btn.textContent = "Refreshed";
+      setTimeout(()=>btn.textContent="Pull latest news",2000);
+      return;
+    }
+    await loadNews();
+    btn.textContent = r.tagged?`+${r.new} · ${r.tagged} scored`:`+${r.new||0} headlines`;
+    setTimeout(()=>btn.textContent="Pull latest news",3000);
+  }catch(e){
+    out.innerHTML = `<div class="warn">${e.name==="AbortError"?"Timed out after 2 minutes":e.message}</div>`;
+  }finally{
+    clearTimeout(timer); btn.disabled=false;
+    if(btn.textContent==="Fetching…") btn.textContent="Pull latest news";
+  }
+}
+
+// ---------- zone overlay ----------
+let overlayData = null, zonesOn = true, markerApi = null;
+try{ zonesOn = localStorage.getItem("zones") !== "0"; }catch{}
+
+function sizeCanvas(){
+  const cv = document.getElementById("zoneCanvas");
+  const col = document.getElementById("chartCol");
+  if(!cv||!col) return null;
+  const dpr = window.devicePixelRatio||1, w = col.clientWidth, h = col.clientHeight;
+  if(cv.width !== w*dpr || cv.height !== h*dpr){
+    cv.width=w*dpr; cv.height=h*dpr; cv.style.width=w+"px"; cv.style.height=h+"px";
+  }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  return ctx;
+}
+
+let paintQueued = false;
+function paintZones(){
+  if(paintQueued) return;
+  paintQueued = true;
+  requestAnimationFrame(()=>{ paintQueued=false; paintZonesNow(); });
+}
+
+function paintZonesNow(){
+  const cv = document.getElementById("zoneCanvas");
+  if(!cv) return;
+  const ctx = sizeCanvas();
+  if(!ctx) return;
+  ctx.clearRect(0,0,cv.clientWidth,cv.clientHeight);
+  if(!overlayData||!zonesOn) return;
+  const ts = chart.timeScale(), right = cv.clientWidth;
+  for(const z of overlayData.zones){
+    const yTop = candles.priceToCoordinate(z.top);
+    const yBot = candles.priceToCoordinate(z.bottom);
+    if(yTop==null||yBot==null) continue;
+    let xL = ts.timeToCoordinate(z.since);
+    if(xL==null){
+      const vr = ts.getVisibleRange();
+      if(!vr||z.since>vr.to) continue;
+      xL=0;
+    }
+    const h2=Math.abs(yBot-yTop), y=Math.min(yTop,yBot);
+    ctx.fillStyle=`rgba(${z.color},0.13)`;
+    ctx.fillRect(xL,y,right-xL,h2);
+    ctx.strokeStyle=`rgba(${z.color},0.55)`;
+    ctx.lineWidth=1;
+    ctx.setLineDash(z.dashed?[4,3]:[]);
+    ctx.strokeRect(xL+.5,y+.5,right-xL-1,Math.max(h2-1,1));
+    ctx.setLineDash([]);
+    if(z.label&&h2>16&&right-xL>90){
+      ctx.fillStyle=`rgba(${z.color},0.95)`;
+      ctx.font="10px -apple-system,Segoe UI,sans-serif";
+      ctx.textBaseline="top";
+      z.label.split("\n").forEach((line,i)=>ctx.fillText(line,xL+6,y+4+i*12));
+    }
+  }
+}
+
+async function loadOverlay(){
+  try{
+    overlayData=await(await fetch(`${API}/overlay/${symbol}?timeframe=${timeframe}`)).json();
+  }catch{ overlayData=null; return; }
+  try{
+    const ms=(overlayData.markers||[]).map(m=>({...m,time:m.time}));
+    if(markerApi) markerApi.setMarkers(zonesOn?ms:[]);
+    else if(LWC.createSeriesMarkers) markerApi=LWC.createSeriesMarkers(candles,zonesOn?ms:[]);
+    else candles.setMarkers(zonesOn?ms:[]);
+  }catch{}
+  paintZones();
+}
+
+// ---------- SMC tab ----------
+let smcLines=[], smcDraw=true;
+try{ smcDraw=localStorage.getItem("smcDraw")!=="0"; }catch{}
+
+function clearSMC(){ smcLines.forEach(l=>{ try{candles.removePriceLine(l);}catch{} }); smcLines=[]; }
+function smcLine(price,color,title,width=1){
+  if(price==null) return;
+  smcLines.push(candles.createPriceLine({price,color,lineWidth:width,
+    lineStyle:LWC.LineStyle.Dashed,axisLabelVisible:true,title}));
+}
+
+async function loadSMC(){
+  const out=document.getElementById("smcOut");
+  const btn=document.getElementById("smcGo");
+  if(!out) return;
+  if(btn){ btn.disabled=true; btn.textContent="…"; }
+  try{
+    const d=await(await fetch(`${API}/smc/${symbol}?timeframe=${timeframe}`)).json();
+    if(d.error){ out.innerHTML=`<div class="warn">${d.error}</div>`; return; }
+    const pd=d.pd_array, st=d.structure, ktrL=d.ktr.levels||{};
+    const dirCol=v=>v==="bullish"?"var(--up)":v==="bearish"?"var(--down)":"var(--muted)";
+    let h=`<div class="statbox"><div class="big">${d.read}</div></div>`;
+    h+=`<div class="smchead">Structure</div>
+      <div class="smcrow"><span>Trend</span><span style="color:${dirCol(st.trend)}">${st.trend}</span></div>`;
+    if(st.last_event) h+=`<div class="smcrow"><span>Last event</span>
+      <span style="color:${dirCol(st.last_event.dir)}">${st.last_event.type} ${st.last_event.dir} @ ${Number(st.last_event.level).toFixed(2)}</span></div>`;
+    h+=`<div class="smcrow"><span>Swing H/L</span><span>${st.last_swing_high??"-"} / ${st.last_swing_low??"-"}</span></div>`;
+    h+=`<div class="smchead">PD array</div>
+      <div class="smcrow"><span>${pd.broken?"Status":"Zone"}</span>
+        <span style="color:${pd.broken?"var(--warn)":pd.zone?.includes("premium")?"var(--down)":pd.zone?.includes("discount")?"var(--up)":"var(--muted)"}">${pd.zone}</span></div>
+      <div class="smcrow"><span>Position</span><span>${pd.position_pct}%</span></div>`;
+    if(d.ktr.applicable!==false){
+      h+=`<div class="smchead">KTR · ${d.ktr.position}</div>`;
+      for(const[k,v] of Object.entries(ktrL)){
+        if(v==null) continue;
+        h+=`<div class="smcrow"><span>${k}</span><span>${Number(v).toFixed(2)}</span></div>`;
+      }
+    }else{
+      h+=`<div class="smchead">KTR</div><div style="font-size:11.5px;color:var(--dim)">${d.ktr.reason}</div>`;
+    }
+    const dem=d.order_blocks?.nearest_demand, sup=d.order_blocks?.nearest_supply;
+    h+=`<div class="smchead">Order blocks</div>`;
+    if(dem) h+=`<div class="zone dem"><b>Demand</b> ${dem.bottom}–${dem.top}<span style="color:var(--dim)"> · ${dem.strength} · ${dem.distance_pct}%</span></div>`;
+    if(sup) h+=`<div class="zone sup"><b>Supply</b> ${sup.bottom}–${sup.top}<span style="color:var(--dim)"> · ${sup.strength} · ${sup.distance_pct}%</span></div>`;
+    const lq=d.liquidity;
+    h+=`<div class="smchead">Liquidity</div>
+      <div class="smcrow"><span>BSL</span><span>${lq.bsl??"-"} ${lq.bsl_swept?"<b style='color:var(--warn)'>SWEPT</b>":""}</span></div>
+      <div class="smcrow"><span>SSL</span><span>${lq.ssl??"-"} ${lq.ssl_swept?"<b style='color:var(--warn)'>SWEPT</b>":""}</span></div>`;
+    h+=`<div class="smchead">Triggers</div>
+      <div class="smcrow"><span>CISD</span><span style="color:${dirCol(d.cisd?.signal)}">${d.cisd?.signal?d.cisd.signal+" @ "+d.cisd.level:"-"}</span></div>
+      <div class="smcrow"><span>CRT</span><span style="color:${dirCol(d.crt?.signal)}">${d.crt?.signal||"-"}</span></div>
+      <div class="smcrow"><span>Order flow</span><span style="color:${(d.order_flow?.delta_pct||0)>=0?"var(--up)":"var(--down)"}">${d.order_flow?.bias} ${Math.abs(d.order_flow?.delta_pct||0)}%</span></div>`;
+    out.innerHTML=h;
+    clearSMC();
+    if(smcDraw&&d.ktr.applicable!==false){
+      smcLine(ktrL.OP,"#ffffff","OP",2);
+      smcLine(ktrL.MLP,"#d4af37","MLP");
+      [1,2,3].forEach(n=>{
+        smcLine(ktrL[`KTR+${n}`],["#00e676","#ffeb3b","#ff9800"][n-1],`KTR+${n}`);
+        smcLine(ktrL[`KTR-${n}`],["#00e676","#ffeb3b","#ff9800"][n-1],`KTR-${n}`);
+      });
+      if(lq.bsl) smcLine(lq.bsl,"#ff9800","BSL");
+      if(lq.ssl) smcLine(lq.ssl,"#00bcd4","SSL");
+      if(dem){ smcLine(dem.top,"rgba(38,166,154,.8)","OB dem hi"); smcLine(dem.bottom,"rgba(38,166,154,.8)","OB dem lo"); }
+      if(sup){ smcLine(sup.top,"rgba(239,83,80,.8)","OB sup hi"); smcLine(sup.bottom,"rgba(239,83,80,.8)","OB sup lo"); }
+    }
+  }catch(e){ out.innerHTML=`<div class="warn">${e.message}</div>`; }
+  finally{ if(btn){ btn.disabled=false; btn.textContent="Refresh SMC"; } }
+}
+
+// ---------- cascade + dashboard ----------
+async function loadCascade(){
+  const box=document.getElementById("cascadeBox");
+  if(!box) return;
+  try{
+    const c=await(await fetch(`${API}/cascade/${symbol}?timeframe=${timeframe}`)).json();
+    if(c.stage==="no_data"){ box.innerHTML=""; return; }
+    if(c.stage==="not_applicable"){
+      box.innerHTML=`<div class="casc"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin-bottom:6px">Top-down cascade</div><div class="verdict" style="border:0;padding-top:0">${c.message}</div></div>`;
+      return;
+    }
+    const reached=c.stage;
+    const blocked=/cancelled|blocked/.test(c.status);
+    const cls=n=>n<reached?"done":n===reached?(c.ready?"done":blocked?"block":"wait"):"wait";
+    const dirCol=c.direction==="long"?"var(--up)":c.direction==="short"?"var(--down)":"var(--muted)";
+    box.innerHTML=`<div class="casc">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin-bottom:6px">Top-down cascade
+        <b style="color:${dirCol};float:right;text-transform:none;font-size:12px">${c.direction||"no bias"}</b></div>
+      <div class="stg ${cls(1)}"><span class="n">1</span><span>${c.bias?.timeframe} bias</span><small>${c.bias?.structure} · ${c.bias?.signal}</small></div>
+      <div class="stg ${cls(2)}"><span class="n">2</span><span>${c.confirm?.timeframe} confirm</span><small>${c.confirm?.structure}</small></div>
+      <div class="stg ${cls(3)}"><span class="n">3</span><span>${c.entry?.timeframe} trigger</span><small>${c.trigger||c.entry?.pd_zone}</small></div>
+      <div class="verdict">${c.message}</div>
+      ${c.ready?`<div style="margin-top:9px;padding:8px 10px;border-radius:6px;background:rgba(38,166,154,.12);border:1px solid var(--up);color:var(--up);font-size:12px;font-weight:600">All three align — ${c.direction}</div>`:""}
+    </div>`;
+  }catch{ box.innerHTML=""; }
+}
+
+let dashOn = !window.matchMedia("(max-width: 900px)").matches;
+try{ const s=localStorage.getItem("dash"); if(s!==null) dashOn=s!=="0"; }catch{}
+
+const GOOD=["bull","long","buy","up","same direction","discount"];
+const BAD=["bear","short","sell","down","diverging","premium"];
+function tint(v){
+  const t=String(v).toLowerCase();
+  if(GOOD.some(w=>t.includes(w))) return "var(--up)";
+  if(BAD.some(w=>t.includes(w))) return "var(--down)";
+  if(t.includes("wait")||t.includes("broken")||t.includes("cancel")) return "var(--warn)";
+  return "var(--text)";
+}
+
+async function loadDashboard(){
+  const dp=document.getElementById("dashPanel"), bp=document.getElementById("btcPanel");
+  if(!dp) return;
+  dp.classList.toggle("on",dashOn); if(bp) bp.classList.toggle("on",false);
+  if(!dashOn) return;
+  try{
+    const d=await(await fetch(`${API}/dashboard/${symbol}?timeframe=${timeframe}`)).json();
+    let h=`<div class="hd"><span>SMC + KTR</span><span style="color:var(--text)">${d.symbol}</span></div>`;
+    for(const[k,v] of Object.entries(d.rows||{}))
+      h+=`<div class="rw"><span>${k}</span><span style="color:${tint(v)}">${v??"-"}</span></div>`;
+    const c=d.cascade||{};
+    h+=`<div class="sec">Cascade</div>
+      <div class="rw"><span>1 Bias</span><span style="color:${tint(c.bias)}">${c.bias||"-"}</span></div>
+      <div class="rw"><span>2 Confirm</span><span style="color:${tint(c.confirm)}">${c.confirm||"-"}</span></div>
+      <div class="rw"><span>3 Entry</span><span style="color:${c.ready?"var(--up)":tint(c.entry)}">${c.entry||"-"}</span></div>
+      <div class="rw"><span>Price</span><span style="color:var(--text)">${d.price||""}</span></div>`;
+    dp.innerHTML=h;
+    if(bp&&d.btc){
+      const b=d.btc;
+      bp.innerHTML=`<div class="hd"><span>₿ BTC</span><span style="color:var(--text)">${b.symbol}</span></div>
+        <div class="rw"><span>Price</span><span style="color:${b.candle==="bull"?"var(--up)":"var(--down)"}">${b.price?.toLocaleString()}</span></div>
+        <div class="rw"><span>Day</span><span style="color:${b.day_change_pct>=0?"var(--up)":"var(--down)"}">${b.day_change_pct>=0?"+":""}${b.day_change_pct}%</span></div>
+        <div class="rw"><span>Trend</span><span style="color:${tint(b.trend)}">${b.trend}</span></div>
+        <div class="rw"><span>Hint</span><span style="color:var(--muted);font-size:10px">${b.hint}</span></div>`;
+      bp.classList.add("on");
+    }
+  }catch{}
+}
 
 // ---------- indicators ----------
 let indCatalog = [], indOn = ["ema"], indSeries = {}, subCharts = {};
@@ -1648,149 +1991,6 @@ window.addEventListener("orientationchange", ()=>{
   setTimeout(()=>{ try{ chart.timeScale().fitContent(); paintZones(); }catch{} }, 300);
 });
 
-
-// ---------- news ----------
-let newsFilter = "all";
-let lastNewsTs = null, newsAutoTimer = null;
-
-async function autoRefreshNews(){
-  try{
-    const qs = lastNewsTs ? "&since=" + encodeURIComponent(lastNewsTs) : "";
-    const d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=40`)).json();
-    if(!d.items || !d.items.length) return;
-    const newest = d.items[0].published_at;
-    if(lastNewsTs && newest <= lastNewsTs) return;
-    lastNewsTs = newest;
-    if(document.getElementById("p-news").classList.contains("on")){
-      loadNews();
-    }else{
-      const tab = document.querySelector('[data-p="news"]');
-      if(tab && !tab.querySelector(".bdot")){
-        const dot = document.createElement("span");
-        dot.className = "bdot";
-        dot.style.cssText = "width:6px;height:6px;background:var(--up);border-radius:50%;display:inline-block;margin-left:5px;vertical-align:middle";
-        tab.appendChild(dot);
-      }
-    }
-  }catch{}
-}
-function startNewsAuto(){ newsAutoTimer = setInterval(autoRefreshNews, 60000); }
-function stopNewsAuto(){ if(newsAutoTimer){ clearInterval(newsAutoTimer); newsAutoTimer = null; } }
-
-async function loadNews(){
-  const out = document.getElementById("newsOut");
-  if(!out) return;
-  try{
-    let d;
-    try{
-      d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=60`)).json();
-    }catch{
-      d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json();
-    }
-    if(!d.items || !d.items.length){
-      try{ d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json(); }catch{}
-    }
-
-    const RANK = {low:1, medium:2, high:3};
-    const DIR = {
-      bullish: ["up","▲"], bearish: ["down","▼"], neutral: ["muted","–"]
-    };
-    let items = d.items || [];
-    if(newsFilter === "scored") items = items.filter(i => i.tagged || i.scored_by);
-    if(newsFilter === "medium") items = items.filter(i => RANK[i.impact] >= 2);
-    if(newsFilter === "high")   items = items.filter(i => i.impact === "high");
-
-    items.sort((a,b)=> RANK[b.impact] - RANK[a.impact] ||
-      (new Date(b.published_at) - new Date(a.published_at)));
-    items = items.slice(0, 30);
-    if(items.length) lastNewsTs = items[0].published_at;
-
-    if(!items.length){
-      out.innerHTML = `<div class="empty">No headlines yet. Tap "Pull latest news".</div>`;
-      return;
-    }
-
-    const sent = d.sentiment || {};
-    const sentCol = sent.label === "bullish" ? "var(--up)"
-                  : sent.label === "bearish" ? "var(--down)" : "var(--muted)";
-    let html = `<div style="display:flex;justify-content:space-between;
-      font-size:11px;color:var(--dim);margin-bottom:10px">
-      <span>gold sentiment <b style="color:${sentCol}">${sent.label || "neutral"}</b></span>
-      <span>${sent.articles || items.length} stories${sent.high_impact ? " · "+sent.high_impact+" high impact" : ""}</span>
-    </div>`;
-
-    html += items.map(i => {
-      const scored = i.tagged || i.scored_by;
-      const assets = i.assets || {};
-      const tags = scored
-        ? Object.entries(assets).map(([k,v])=>{
-            const [c,arrow] = DIR[v] || DIR.neutral;
-            return `<span class="tag">${k}<b class="${c}">${arrow} ${v}</b></span>`;
-          }).join("") + (i.scored_by === "rules"
-              ? `<span class="tag" style="color:var(--dim)" title="keyword rules">rules</span>` : "")
-        : `<span class="tag" style="color:var(--dim)">no signal</span>`;
-
-      const ago_ms = Date.now() - new Date(i.published_at).getTime();
-      const ago_s = Math.floor(ago_ms / 1000);
-      const ago = ago_s < 60 ? "just now"
-                : ago_s < 3600 ? Math.floor(ago_s/60)+"m ago"
-                : ago_s < 86400 ? Math.floor(ago_s/3600)+"h ago"
-                : Math.floor(ago_s/86400)+"d ago";
-
-      return `<div class="news-item">
-        <div class="news-head">
-          <span class="imp ${i.impact}">${i.impact}</span>
-          <span class="news-src">${i.source || ""}</span>
-          <span style="font-size:10px;color:var(--dim);margin-left:auto"
-                title="${i.published_at}">${ago}</span>
-        </div>
-        <div class="news-title">${i.url
-          ? `<a href="${i.url}" target="_blank" style="color:inherit;text-decoration:none">${i.title}</a>`
-          : i.title}</div>
-        <div class="news-tags">${tags}</div>
-        ${i.takeaway ? `<div class="news-take">⚡ ${i.takeaway}</div>` : ""}
-      </div>`;
-    }).join("");
-
-    out.innerHTML = html;
-  }catch(e){
-    out.innerHTML = `<div class="warn">${e.message}</div>`;
-  }
-}
-
-async function pullNews(){
-  const btn = document.getElementById("pullNews");
-  const out = document.getElementById("newsOut");
-  if(!btn || !out) return;
-  btn.disabled = true; btn.textContent = "Fetching…";
-  out.innerHTML = `<div class="empty">Reading feeds… usually 10–20 seconds.</div>`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(()=>ctrl.abort(), 120000);
-  try{
-    let r;
-    try{
-      const res = await fetch(`${API}/news/ingest`, {method:"POST", signal: ctrl.signal});
-      if(!res.ok) throw new Error("status "+res.status);
-      r = await res.json();
-    }catch(e){
-      if(e.name === "AbortError") throw e;
-      await loadNews();
-      btn.textContent = "Refreshed";
-      setTimeout(()=>btn.textContent="Pull latest news", 2000);
-      return;
-    }
-    await loadNews();
-    btn.textContent = r.tagged ? `+${r.new} · ${r.tagged} scored` : `+${r.new || 0} headlines`;
-    setTimeout(()=>btn.textContent="Pull latest news", 3000);
-  }catch(e){
-    out.innerHTML = `<div class="warn">${e.name==="AbortError"?"Timed out after 2 minutes":e.message}</div>`;
-  }finally{
-    clearTimeout(timer); btn.disabled = false;
-    if(btn.textContent==="Fetching…") btn.textContent="Pull latest news";
-  }
-}
-
-
 // ---------- wiring ----------
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
@@ -1842,8 +2042,37 @@ initChart();
 initSheet();
 loadTimeframes();
 loadIndicatorCatalog();
-loadChart().then(schedule);
+loadChart().then(()=>{ schedule(); schedulePrice(); });
 loadProviders();
+
+// --- news button wiring ---
+const _pullBtn = document.getElementById("pullNews");
+const _refreshBtn = document.getElementById("refreshNews");
+if(_pullBtn) _pullBtn.onclick = pullNews;
+if(_refreshBtn) _refreshBtn.onclick = loadNews;
+
+// --- news filter bar wiring ---
+document.querySelectorAll("#impBar [data-imp]").forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll("#impBar [data-imp]").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on");
+    newsFilter = b.dataset.imp;
+    loadNews();
+  };
+});
+
+// --- start news auto-refresh ---
+startNewsAuto();
+
+// --- clear news dot when tab opens ---
+document.querySelectorAll(".tab").forEach(t=>{
+  t.addEventListener("click", ()=>{
+    if(t.dataset.p === "news"){
+      const dot = t.querySelector(".bdot");
+      if(dot) dot.remove();
+    }
+  });
+});
 </script>
 </body>
 </html>
