@@ -156,18 +156,30 @@ TAG_SCHEMA = {
 
 TAG_SYSTEM = """You tag financial news for a trading terminal.
 
-Be conservative. Most headlines move nothing - mark them low impact and \
-neutral across the board rather than inventing a signal. Reserve high impact \
-for central bank decisions, war and conflict escalation, and major surprise \
-economic data.
+Be conservative on impact. Most headlines move nothing - mark them low impact \
+and neutral rather than inventing a signal. Reserve high impact for central \
+bank decisions, war and conflict escalation, and major surprise economic data.
 
 Think about the actual transmission mechanism before assigning a direction. \
 Risk-off tends to be gold bullish and stocks bearish. A stronger dollar is \
 usually gold bearish. Supply disruption in the Gulf is oil bullish. If you \
 cannot name the mechanism, the answer is neutral.
 
-The takeaway must be concrete and short. If there is no clear action, return \
-an empty string rather than filler."""
+The takeaway is what a desk would say out loud when the headline crosses. \
+Write it as an instruction with a condition, not a description:
+
+  good: "Fade USD strength on the weaker growth outlook; buy gold dips, watch \
+equities for rollover confirmation"
+  good: "Wait for the live tape - tariff comments could spike crypto; \
+pre-positioning here is gambling"
+  good: "Buy oil on confirmed supply disruption, stop below the pre-headline low"
+  bad:  "This could affect gold prices"
+  bad:  "Traders should monitor the situation"
+  bad:  "Markets may react to this news"
+
+Name the instrument and the trigger. If the honest answer is to wait, say what \
+you are waiting for. If there is genuinely no action, return an empty string \
+rather than filler."""
 
 
 # Publishers append their own name to syndicated copy, so the same wire story
@@ -426,13 +438,17 @@ def prune_old(hours: int = 48) -> int:
 
 
 def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
-               limit_per_feed: int = 10) -> dict:
+               limit_per_feed: int = 10, ai_tag: int = 6) -> dict:
     """Fetch and score headlines in one request, storing nothing.
 
     Serverless platforms give each request a fresh process, so the in-memory
     store is always empty there. This path does the whole job in one call:
     pull the feeds in parallel, drop opinion and off-topic pieces, score with
-    the keyword rules (no AI, so no latency and no quota), and return.
+    keyword rules, then upgrade the top `ai_tag` items with a model call so
+    they carry a real directional read and an actionable takeaway.
+
+    Keyword rules are the floor - fast, free, always available. The AI pass is
+    what turns "gold neutral" into "fade USD strength, buy gold dips".
 
     Slower per request than the cached path, but it works anywhere.
     """
@@ -478,9 +494,43 @@ def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
             })
 
     rank = {"low": 1, "medium": 2, "high": 3}
-    items.sort(key=lambda i: (-rank[i["impact"]], i["published_at"]), reverse=False)
     items.sort(key=lambda i: (rank[i["impact"]], i["published_at"]), reverse=True)
     items = items[:limit]
+
+    # Upgrade the highest-impact headlines with a real model read. Only the
+    # top few - a full page of AI calls is slow and most low-impact items do
+    # not repay the cost.
+    if ai_tag:
+        worth_it = [i for i in items if i["impact"] in ("high", "medium")][:ai_tag]
+        if worth_it:
+            def _enrich(item):
+                try:
+                    tags = json_call(
+                        role="cheap", system=TAG_SYSTEM,
+                        user=f"Headline: {item['title']}\n\n{item.get('summary','')[:800]}",
+                        schema=TAG_SCHEMA, max_tokens=500,
+                    )
+                    tags.pop("_provider", None)
+                    if not tags.get("relevant"):
+                        return None
+                    item.update({
+                        "impact": tags.get("impact", item["impact"]),
+                        "assets": tags.get("assets", item["assets"]),
+                        "takeaway": tags.get("takeaway", ""),
+                        "summary": tags.get("summary") or item.get("summary", ""),
+                        "tagged": True,
+                        "scored_by": "ai",
+                    })
+                    return item
+                except Exception as e:
+                    log.debug("live tagging failed for %r: %s", item["title"][:40], e)
+                    return None
+
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                list(pool.map(_enrich, worth_it))
+
+            # Re-sort in case the AI changed any impact ratings
+            items.sort(key=lambda i: (rank[i["impact"]], i["published_at"]), reverse=True)
 
     # Aggregate sentiment for the symbol, same weighting as the cached path.
     score, high = 0.0, 0

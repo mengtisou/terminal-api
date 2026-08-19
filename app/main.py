@@ -771,15 +771,15 @@ def news_poll(since: str | None = None, symbol: str = "XAUUSD"):
 
 
 @app.get("/news/live")
-def news_live(symbol: str = "XAUUSD", limit: int = 30):
-    """Fetch and score headlines in one request, storing nothing.
+def news_live(symbol: str = "XAUUSD", limit: int = 30, ai_tag: int = 6):
+    """Fetch, score and AI-tag headlines in one request, storing nothing.
 
-    Use this when the backend runs somewhere without persistent memory -
-    serverless platforms give every request a fresh process, so the cached
-    store is always empty there.
+    Keyword rules score everything instantly; the top `ai_tag` high-impact
+    items then get a model pass for a real directional read and a concrete
+    takeaway. Set ai_tag=0 to skip the model entirely.
     """
     from .news import fetch_live
-    return fetch_live(symbol, limit)
+    return fetch_live(symbol, limit, ai_tag=ai_tag)
 
 
 @app.get("/news/feeds")

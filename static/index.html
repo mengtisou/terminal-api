@@ -817,6 +817,22 @@ async function loadChart(){
   const range = firstLoad ? null : chart.timeScale().getVisibleLogicalRange();
 
   const sb = d.bars.map(b => ({...b, time: shift(b.time)}));
+
+  // The server's cached last candle can be a few seconds behind the tick feed.
+  // Overwriting the live candle with it makes the bar visibly jump backwards,
+  // then correct itself on the next tick. So carry the live values forward.
+  if(hasLiveTick && lastBar && sb.length){
+    const serverLast = sb[sb.length - 1];
+    if(serverLast.time === lastBar.time){
+      sb[sb.length - 1] = {
+        ...serverLast,
+        high:  Math.max(serverLast.high, lastBar.high),
+        low:   Math.min(serverLast.low,  lastBar.low),
+        close: lastBar.close,        // the tick price is the freshest truth
+      };
+    }
+  }
+
   candles.setData(sb);
   // With per-bar colours the series defaults must not override them.
   candles.applyOptions(candleMode === "off"
@@ -835,7 +851,9 @@ async function loadChart(){
   }
 
   const last = sb.at(-1);
-  lastBar = last;              // hand the forming candle to the tick updater
+  // Only adopt the server bar when it is a NEW candle. Otherwise keep the
+  // live one we have been updating, so ticks continue from where they were.
+  if(!lastBar || !last || last.time !== lastBar.time) lastBar = last;
   drawLegend(last);
   document.getElementById("sym").textContent = d.symbol;
 
