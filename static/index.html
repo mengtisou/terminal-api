@@ -1648,6 +1648,149 @@ window.addEventListener("orientationchange", ()=>{
   setTimeout(()=>{ try{ chart.timeScale().fitContent(); paintZones(); }catch{} }, 300);
 });
 
+
+// ---------- news ----------
+let newsFilter = "all";
+let lastNewsTs = null, newsAutoTimer = null;
+
+async function autoRefreshNews(){
+  try{
+    const qs = lastNewsTs ? "&since=" + encodeURIComponent(lastNewsTs) : "";
+    const d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=40`)).json();
+    if(!d.items || !d.items.length) return;
+    const newest = d.items[0].published_at;
+    if(lastNewsTs && newest <= lastNewsTs) return;
+    lastNewsTs = newest;
+    if(document.getElementById("p-news").classList.contains("on")){
+      loadNews();
+    }else{
+      const tab = document.querySelector('[data-p="news"]');
+      if(tab && !tab.querySelector(".bdot")){
+        const dot = document.createElement("span");
+        dot.className = "bdot";
+        dot.style.cssText = "width:6px;height:6px;background:var(--up);border-radius:50%;display:inline-block;margin-left:5px;vertical-align:middle";
+        tab.appendChild(dot);
+      }
+    }
+  }catch{}
+}
+function startNewsAuto(){ newsAutoTimer = setInterval(autoRefreshNews, 60000); }
+function stopNewsAuto(){ if(newsAutoTimer){ clearInterval(newsAutoTimer); newsAutoTimer = null; } }
+
+async function loadNews(){
+  const out = document.getElementById("newsOut");
+  if(!out) return;
+  try{
+    let d;
+    try{
+      d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=60`)).json();
+    }catch{
+      d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json();
+    }
+    if(!d.items || !d.items.length){
+      try{ d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json(); }catch{}
+    }
+
+    const RANK = {low:1, medium:2, high:3};
+    const DIR = {
+      bullish: ["up","▲"], bearish: ["down","▼"], neutral: ["muted","–"]
+    };
+    let items = d.items || [];
+    if(newsFilter === "scored") items = items.filter(i => i.tagged || i.scored_by);
+    if(newsFilter === "medium") items = items.filter(i => RANK[i.impact] >= 2);
+    if(newsFilter === "high")   items = items.filter(i => i.impact === "high");
+
+    items.sort((a,b)=> RANK[b.impact] - RANK[a.impact] ||
+      (new Date(b.published_at) - new Date(a.published_at)));
+    items = items.slice(0, 30);
+    if(items.length) lastNewsTs = items[0].published_at;
+
+    if(!items.length){
+      out.innerHTML = `<div class="empty">No headlines yet. Tap "Pull latest news".</div>`;
+      return;
+    }
+
+    const sent = d.sentiment || {};
+    const sentCol = sent.label === "bullish" ? "var(--up)"
+                  : sent.label === "bearish" ? "var(--down)" : "var(--muted)";
+    let html = `<div style="display:flex;justify-content:space-between;
+      font-size:11px;color:var(--dim);margin-bottom:10px">
+      <span>gold sentiment <b style="color:${sentCol}">${sent.label || "neutral"}</b></span>
+      <span>${sent.articles || items.length} stories${sent.high_impact ? " · "+sent.high_impact+" high impact" : ""}</span>
+    </div>`;
+
+    html += items.map(i => {
+      const scored = i.tagged || i.scored_by;
+      const assets = i.assets || {};
+      const tags = scored
+        ? Object.entries(assets).map(([k,v])=>{
+            const [c,arrow] = DIR[v] || DIR.neutral;
+            return `<span class="tag">${k}<b class="${c}">${arrow} ${v}</b></span>`;
+          }).join("") + (i.scored_by === "rules"
+              ? `<span class="tag" style="color:var(--dim)" title="keyword rules">rules</span>` : "")
+        : `<span class="tag" style="color:var(--dim)">no signal</span>`;
+
+      const ago_ms = Date.now() - new Date(i.published_at).getTime();
+      const ago_s = Math.floor(ago_ms / 1000);
+      const ago = ago_s < 60 ? "just now"
+                : ago_s < 3600 ? Math.floor(ago_s/60)+"m ago"
+                : ago_s < 86400 ? Math.floor(ago_s/3600)+"h ago"
+                : Math.floor(ago_s/86400)+"d ago";
+
+      return `<div class="news-item">
+        <div class="news-head">
+          <span class="imp ${i.impact}">${i.impact}</span>
+          <span class="news-src">${i.source || ""}</span>
+          <span style="font-size:10px;color:var(--dim);margin-left:auto"
+                title="${i.published_at}">${ago}</span>
+        </div>
+        <div class="news-title">${i.url
+          ? `<a href="${i.url}" target="_blank" style="color:inherit;text-decoration:none">${i.title}</a>`
+          : i.title}</div>
+        <div class="news-tags">${tags}</div>
+        ${i.takeaway ? `<div class="news-take">⚡ ${i.takeaway}</div>` : ""}
+      </div>`;
+    }).join("");
+
+    out.innerHTML = html;
+  }catch(e){
+    out.innerHTML = `<div class="warn">${e.message}</div>`;
+  }
+}
+
+async function pullNews(){
+  const btn = document.getElementById("pullNews");
+  const out = document.getElementById("newsOut");
+  if(!btn || !out) return;
+  btn.disabled = true; btn.textContent = "Fetching…";
+  out.innerHTML = `<div class="empty">Reading feeds… usually 10–20 seconds.</div>`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), 120000);
+  try{
+    let r;
+    try{
+      const res = await fetch(`${API}/news/ingest`, {method:"POST", signal: ctrl.signal});
+      if(!res.ok) throw new Error("status "+res.status);
+      r = await res.json();
+    }catch(e){
+      if(e.name === "AbortError") throw e;
+      await loadNews();
+      btn.textContent = "Refreshed";
+      setTimeout(()=>btn.textContent="Pull latest news", 2000);
+      return;
+    }
+    await loadNews();
+    btn.textContent = r.tagged ? `+${r.new} · ${r.tagged} scored` : `+${r.new || 0} headlines`;
+    setTimeout(()=>btn.textContent="Pull latest news", 3000);
+  }catch(e){
+    out.innerHTML = `<div class="warn">${e.name==="AbortError"?"Timed out after 2 minutes":e.message}</div>`;
+  }finally{
+    clearTimeout(timer); btn.disabled = false;
+    if(btn.textContent==="Fetching…") btn.textContent="Pull latest news";
+  }
+}
+
+
 // ---------- wiring ----------
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));
