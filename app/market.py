@@ -275,15 +275,20 @@ class BinanceProvider:
 class OandaProvider:
     """Forex, metals and indices. Needs OANDA_TOKEN from a practice account."""
 
-    GRAN = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30",
-            "1h": "H1", "4h": "H4", "1d": "D"}
+    GRAN = {"1m": "M1", "2m": "M2", "3m": "M3", "5m": "M5",
+            "10m": "M10", "15m": "M15", "30m": "M30",
+            "1h": "H1", "2h": "H2", "3h": "H3", "4h": "H4",
+            "6h": "H6", "8h": "H8", "12h": "H12",
+            "1d": "D", "1w": "W", "1M": "M"}
     SYMBOLS = {"XAUUSD": "XAU_USD", "XAGUSD": "XAG_USD", "EURUSD": "EUR_USD",
                "GBPUSD": "GBP_USD", "USDJPY": "USD_JPY", "USOIL": "WTICO_USD"}
 
     def fetch(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
         instrument = self.SYMBOLS.get(symbol.upper(), symbol)
+        # Strip /v3 suffix if the user included it in OANDA_BASE already.
+        base = OANDA_BASE.rstrip("/").removesuffix("/v3")
         r = httpx.get(
-            f"{OANDA_BASE}/v3/instruments/{instrument}/candles",
+            f"{base}/v3/instruments/{instrument}/candles",
             headers={"Authorization": f"Bearer {OANDA_TOKEN}"},
             params={"granularity": self.GRAN[timeframe], "count": limit, "price": "M"},
             timeout=15,

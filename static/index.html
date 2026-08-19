@@ -889,7 +889,10 @@ function schedule(){
   // Nothing changes while the market is shut, and a hidden tab does not need
   // updating at all - both are free savings on a metered provider.
   const hidden = document.hidden;
-  const wait = hidden ? 120000 : marketOpen ? pollSeconds * 1000 : 120000;
+  // When closed or hidden, back off aggressively to save quota on Hetzner too.
+  const wait = hidden ? 300000
+             : !marketOpen ? 60000
+             : pollSeconds * 1000;
   pollTimer = setTimeout(async ()=>{ await loadChart(); schedule(); }, wait);
 }
 
