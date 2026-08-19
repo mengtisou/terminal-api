@@ -771,11 +771,11 @@ def news_poll(since: str | None = None, symbol: str = "XAUUSD"):
 
 
 @app.get("/news/live")
-def news_live(symbol: str = "XAUUSD", limit: int = 30, ai_tag: int = 6):
+def news_live(symbol: str = "XAUUSD", limit: int = 30, ai_tag: int = 40):
     """Fetch, score and AI-tag headlines in one request, storing nothing.
 
-    Keyword rules score everything instantly; the top `ai_tag` high-impact
-    items then get a model pass for a real directional read and a concrete
+    Keyword rules score everything instantly; up to `ai_tag` items then get a
+    model pass, in batches, for a real directional read and a concrete
     takeaway. Set ai_tag=0 to skip the model entirely.
     """
     from .news import fetch_live

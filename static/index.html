@@ -1257,7 +1257,7 @@ async function loadNews(){
     // takeaway lines appear without ever making the user wait for them.
     if(!newsEnriching){
       newsEnriching = true;
-      fetch(`${API}/news/live?symbol=${symbol}&limit=60&ai_tag=3`)
+      fetch(`${API}/news/live?symbol=${symbol}&limit=60&ai_tag=40`)
         .then(r => r.json())
         .then(rich => {
           if(rich?.items?.length &&

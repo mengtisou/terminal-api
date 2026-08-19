@@ -182,6 +182,67 @@ Name the instrument and the trigger. If the honest answer is to wait, say what \
 you are waiting for. If there is genuinely no action, return an empty string \
 rather than filler."""
 
+# --- batch tagging -----------------------------------------------------------
+# One call per article is the obvious way to write this and the wrong way to
+# run it. The free tier spaces calls ~7.5s apart, so scoring a page of forty
+# headlines one at a time takes five minutes - the browser gives up long before,
+# and the panel ends up showing "rules / neutral" on everything. Sending a whole
+# page in a single call does the same work in one request.
+
+TAG_BATCH_SIZE = int(os.getenv("TAG_BATCH_SIZE", "12"))
+
+TAG_BATCH_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "items": {
+            "type": "array",
+            "description": "One entry per headline supplied. Use the id given in brackets.",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "The bracketed id of the headline this entry scores.",
+                    },
+                    "relevant": {
+                        "type": "boolean",
+                        "description": "False for sports, lifestyle, single-company news with no macro read-through.",
+                    },
+                    "impact": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "high is rare: central bank decisions, war, major surprise data.",
+                    },
+                    "assets": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {b: _SENT for b in BUCKETS},
+                        "required": BUCKETS,
+                        "description": "Direction this story implies for each asset class over the next 24-48h.",
+                    },
+                    "summary": {"type": "string", "description": "At most 20 words, plain and factual."},
+                    "takeaway": {
+                        "type": "string",
+                        "description": "One short actionable line. Empty string if there is no clear action.",
+                    },
+                },
+                "required": ["id", "relevant", "impact", "assets", "summary", "takeaway"],
+            },
+        }
+    },
+    "required": ["items"],
+}
+
+TAG_BATCH_SYSTEM = TAG_SYSTEM + """
+
+You will be given several headlines at once, each prefixed with a numeric id in
+square brackets. Return exactly one entry for every id you were given, carrying
+that same id back. Score each headline on its own merits - do not let a loud
+headline pull the ratings of its neighbours, and do not assume a page of news
+must contain something high impact. Most of any given page is low."""
+
 
 # Publishers append their own name to syndicated copy, so the same wire story
 # arrives as "Dollar feeble as rate bets dwindle" and
@@ -438,9 +499,64 @@ def prune_old(hours: int = 48) -> int:
     return len(stale)
 
 
+def _tag_batch(items: list[dict]) -> int:
+    """Score a page of headlines in one model call. Returns how many landed.
+
+    Mutates the dicts in place. A failed batch is not an error - the caller
+    keeps the keyword scores it already had, which is what the panel shows
+    today anyway.
+    """
+    if not items:
+        return 0
+
+    numbered = "\n".join(
+        f"[{n}] {i['title']}"
+        + (f"\n    {i['summary'][:160]}" if i.get("summary") else "")
+        for n, i in enumerate(items)
+    )
+    try:
+        out = json_call(
+            role="cheap", system=TAG_BATCH_SYSTEM,
+            user=f"Score every headline below. Return one entry per id.\n\n{numbered}",
+            schema=TAG_BATCH_SCHEMA,
+            # Each entry runs ~120 tokens of JSON; leave room or the response
+            # truncates mid-object and the whole batch fails to parse.
+            max_tokens=200 * len(items) + 500,
+        )
+    except Exception as e:
+        log.warning("batch tagging failed for %d headlines: %s", len(items), e)
+        return 0
+
+    tagged = 0
+    for row in (out.get("items") or []):
+        n = row.get("id")
+        # An invented or out-of-range id would tag the wrong headline, which is
+        # worse than leaving it on rules. Drop those silently.
+        if not isinstance(n, int) or not (0 <= n < len(items)):
+            continue
+        item = items[n]
+        if item.get("tagged"):
+            continue                      # model returned a duplicate id
+        item.update({
+            "impact": row.get("impact", item["impact"]),
+            "assets": row.get("assets", item["assets"]),
+            "takeaway": row.get("takeaway", ""),
+            "summary": row.get("summary") or item.get("summary", ""),
+            "relevant": bool(row.get("relevant", True)),
+            "tagged": True,
+            "scored_by": "ai",
+        })
+        tagged += 1
+
+    if tagged < len(items):
+        log.info("batch returned %d/%d entries; rest stay on rules",
+                 tagged, len(items))
+    return tagged
+
+
 def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
-               limit_per_feed: int = 10, ai_tag: int = 3,
-               ai_budget_s: float = 20.0) -> dict:
+               limit_per_feed: int = 10, ai_tag: int = 40,
+               ai_budget_s: float = 45.0) -> dict:
     """Fetch and score headlines in one request, storing nothing.
 
     Serverless platforms give each request a fresh process, so the in-memory
@@ -503,47 +619,30 @@ def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
     # top few - a full page of AI calls is slow and most low-impact items do
     # not repay the cost.
     if ai_tag:
-        # Only the very top items, and only within a strict time budget. The
-        # free-tier rate limiter spaces calls ~7.5s apart, so an unbounded
-        # batch will always outlast the browser's patience.
-        deadline = _time.monotonic() + ai_budget_s
-        worth_it = [i for i in items if i["impact"] == "high"][:ai_tag]
-        if not worth_it:
-            worth_it = [i for i in items if i["impact"] == "medium"][:ai_tag]
-        if worth_it:
-            def _enrich(item):
-                if _time.monotonic() > deadline:
-                    return None          # out of time - keep the rule score
-                try:
-                    tags = json_call(
-                        role="cheap", system=TAG_SYSTEM,
-                        user=f"Headline: {item['title']}\n\n{item.get('summary','')[:800]}",
-                        schema=TAG_SCHEMA, max_tokens=500,
-                    )
-                    tags.pop("_provider", None)
-                    if not tags.get("relevant"):
-                        return None
-                    item.update({
-                        "impact": tags.get("impact", item["impact"]),
-                        "assets": tags.get("assets", item["assets"]),
-                        "takeaway": tags.get("takeaway", ""),
-                        "summary": tags.get("summary") or item.get("summary", ""),
-                        "tagged": True,
-                        "scored_by": "ai",
-                    })
-                    return item
-                except Exception as e:
-                    log.debug("live tagging failed for %r: %s", item["title"][:40], e)
-                    return None
+        # Tag the whole visible page, not just the top few. Batching is what
+        # makes that affordable: a page of 36 headlines is 3 calls, not 36.
+        # The deadline still applies - if a batch stalls, later ones are
+        # skipped and those headlines keep their keyword scores.
+        started = _time.monotonic()
+        deadline = started + ai_budget_s
+        worth_it = items[:ai_tag]
 
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                list(pool.map(_enrich, worth_it))
-            log.info("live news: AI-tagged %d/%d in %.1fs",
-                     sum(1 for i in worth_it if i.get("scored_by") == "ai"),
-                     len(worth_it), ai_budget_s - (deadline - _time.monotonic()))
+        done = 0
+        for start in range(0, len(worth_it), TAG_BATCH_SIZE):
+            if _time.monotonic() > deadline:
+                log.info("live news: budget spent, %d headlines stay on rules",
+                         len(worth_it) - start)
+                break
+            done += _tag_batch(worth_it[start:start + TAG_BATCH_SIZE])
 
-            # Re-sort in case the AI changed any impact ratings
-            items.sort(key=lambda i: (rank[i["impact"]], i["published_at"]), reverse=True)
+        log.info("live news: AI-tagged %d/%d in %.1fs",
+                 done, len(worth_it), _time.monotonic() - started)
+
+        # The model marks off-topic stories irrelevant; drop them now rather
+        # than letting them dilute the sentiment average below.
+        items = [i for i in items if i.get("relevant", True)]
+        # Re-sort in case the AI changed any impact ratings
+        items.sort(key=lambda i: (rank[i["impact"]], i["published_at"]), reverse=True)
 
     # Aggregate sentiment for the symbol, same weighting as the cached path.
     score, high = 0.0, 0
