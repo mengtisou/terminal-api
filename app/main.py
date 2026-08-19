@@ -676,6 +676,18 @@ def news_poll(since: str | None = None, symbol: str = "XAUUSD"):
     }
 
 
+@app.get("/news/live")
+def news_live(symbol: str = "XAUUSD", limit: int = 30):
+    """Fetch and score headlines in one request, storing nothing.
+
+    Use this when the backend runs somewhere without persistent memory -
+    serverless platforms give every request a fresh process, so the cached
+    store is always empty there.
+    """
+    from .news import fetch_live
+    return fetch_live(symbol, limit)
+
+
 @app.get("/news/feeds")
 def news_feeds():
     """Per-feed reachability. Run this when the news panel comes back empty.
@@ -702,6 +714,26 @@ def news_clear():
     """Purge cached headlines. Use after changing the feed list."""
     from .news import clear_store
     return clear_store()
+
+
+@app.get("/news/latest")
+def news_latest(symbol: str = "XAUUSD", since: str | None = None):
+    """Poll for headlines newer than `since` (ISO timestamp).
+
+    The frontend polls this every 60s. Only fresh articles are returned, so the
+    response is tiny when nothing is new and the page updates automatically.
+    """
+    from .news import feed, relevant_news
+    import datetime as dt
+    items = feed(symbol, limit=60)
+    if since:
+        try:
+            cutoff = dt.datetime.fromisoformat(since)
+            items = [i for i in items
+                     if dt.datetime.fromisoformat(i["published_at"]) > cutoff]
+        except (ValueError, KeyError):
+            pass
+    return {"items": items, "count": len(items)}
 
 
 @app.post("/news/tag")

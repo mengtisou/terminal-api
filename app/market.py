@@ -352,16 +352,16 @@ if MT5Provider is not None:
 # MT5 first everywhere it can serve: it is a real broker feed, has no request
 # limit, and reaches the broker over a path that is not blocked here.
 SYMBOL_ROUTE: dict[str, list[str]] = {
-    "XAUUSD": ["mt5", "oanda", "twelvedata", "yfinance"],
-    "XAGUSD": ["mt5", "oanda", "twelvedata", "yfinance"],
-    "EURUSD": ["mt5", "oanda", "twelvedata", "yfinance"],
-    "GBPUSD": ["mt5", "oanda", "twelvedata", "yfinance"],
-    "USDJPY": ["mt5", "oanda", "twelvedata", "yfinance"],
-    "USOIL": ["mt5", "oanda", "yfinance"],
+    "XAUUSD": ["oanda", "mt5", "twelvedata", "yfinance"],
+    "XAGUSD": ["oanda", "mt5", "twelvedata", "yfinance"],
+    "EURUSD": ["oanda", "mt5", "twelvedata", "yfinance"],
+    "GBPUSD": ["oanda", "mt5", "twelvedata", "yfinance"],
+    "USDJPY": ["oanda", "mt5", "twelvedata", "yfinance"],
+    "USOIL": ["oanda", "mt5", "yfinance"],
     "BTCUSDT": ["mt5", "binance", "yfinance", "twelvedata"],
     "ETHUSDT": ["mt5", "binance", "yfinance", "twelvedata"],
 }
-DEFAULT_ROUTE = ["mt5", "yfinance"]
+DEFAULT_ROUTE = ["oanda", "mt5", "yfinance"]
 
 # --- runtime routing overrides ----------------------------------------------
 # Set from the UI. Persisted so a restart keeps your choice.

@@ -48,7 +48,17 @@ SYMBOL_BUCKET = {
 # trading desk wants what happened, not what a columnist thinks might.
 # RSS feeds are geo-blocked from many Asian networks. Finnhub HTTPS API is
 # the reliable primary source; RSS stays as optional supplementary feeds.
-FEEDS = []  # RSS is supplementary - add feeds here if they work on your network
+# News feeds only - analysis and opinion feeds produce columns, not events.
+# Investing.com's per-category feeds are the most reliable free source that is
+# actually about macro and metals rather than single-company business news.
+FEEDS = [
+    ("Investing Forex", "https://www.investing.com/rss/news_1.rss"),
+    ("Investing Commodities", "https://www.investing.com/rss/commodities.rss"),
+    ("Investing Economy", "https://www.investing.com/rss/news_14.rss"),
+    ("Investing Economic Indicators", "https://www.investing.com/rss/news_95.rss"),
+    ("Investing Breaking", "https://www.investing.com/rss/news_285.rss"),
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+]
 
 # Finnhub categories to pull from in order
 FINNHUB_CATEGORIES = ["general", "forex", "merger"]
@@ -59,6 +69,13 @@ FEED_TIMEOUT = 8
 
 # Opinion and listicle patterns. These are the shapes columns take, and none of
 # them report an event.
+# Sources that publish almost exclusively off-topic content for a gold terminal.
+# Letting them through wastes quota and adds noise.
+OFF_TOPIC_SOURCES = {
+    "cnbc", "disney", "abc", "nbc", "cbs", "bbc sport",
+    "techcrunch", "wired", "engadget", "the verge",
+}
+
 OPINION_PATTERNS = (
     r"^\d+\s+(bold|top|best|worst|key|things|reasons|stocks|ways)",
     r"\b(bold predictions|predictions for|outlook for \d{4}|year ahead)\b",
@@ -78,8 +95,10 @@ OPINION_PATTERNS = (
 _OPINION_RE = [re.compile(p, re.I) for p in OPINION_PATTERNS]
 
 
-def is_opinion(title: str) -> bool:
-    """True for columns, listicles and speculation rather than reported events."""
+def is_opinion(title: str, source: str = "") -> bool:
+    """True for columns, listicles, and clearly off-topic sources."""
+    if source and any(s in source.lower() for s in OFF_TOPIC_SOURCES):
+        return True
     t = title.strip()
     return any(rx.search(t) for rx in _OPINION_RE)
 
@@ -406,6 +425,91 @@ def prune_old(hours: int = 48) -> int:
     return len(stale)
 
 
+def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
+               limit_per_feed: int = 10) -> dict:
+    """Fetch and score headlines in one request, storing nothing.
+
+    Serverless platforms give each request a fresh process, so the in-memory
+    store is always empty there. This path does the whole job in one call:
+    pull the feeds in parallel, drop opinion and off-topic pieces, score with
+    the keyword rules (no AI, so no latency and no quota), and return.
+
+    Slower per request than the cached path, but it works anywhere.
+    """
+    with ThreadPoolExecutor(max_workers=len(FEEDS)) as pool:
+        batches = list(pool.map(lambda f: _fetch_feed(*f)[:limit_per_feed], FEEDS))
+
+    bucket = SYMBOL_BUCKET.get(symbol.upper(), "usd")
+    seen, items = set(), []
+
+    for batch in batches:
+        for raw in batch:
+            title = raw.get("title", "")
+            if not title:
+                continue
+            fp = _fingerprint(title)
+            if fp in seen:
+                continue
+            seen.add(fp)
+
+            source = raw.get("source", "")
+            if is_opinion(title, source):
+                continue
+            summary = raw.get("summary", "")
+            if not looks_relevant(title, summary):
+                continue
+
+            rules = rule_score(title, summary)
+            published = _iso(raw.get("published"))
+            items.append({
+                "fingerprint": fp,
+                "title": title[:160],
+                "summary": summary[:220],
+                "source": source,
+                "url": raw.get("url", ""),
+                "published_at": published or dt.datetime.now(dt.timezone.utc).isoformat(),
+                "date_known": bool(published),
+                "tagged": False,
+                "scored_by": rules["scored_by"] or "rules",
+                "relevant": True,
+                "impact": rules["impact"],
+                "assets": rules["assets"],
+                "takeaway": "",
+            })
+
+    rank = {"low": 1, "medium": 2, "high": 3}
+    items.sort(key=lambda i: (-rank[i["impact"]], i["published_at"]), reverse=False)
+    items.sort(key=lambda i: (rank[i["impact"]], i["published_at"]), reverse=True)
+    items = items[:limit]
+
+    # Aggregate sentiment for the symbol, same weighting as the cached path.
+    score, high = 0.0, 0
+    for i in items:
+        w = {"high": 3, "medium": 2, "low": 1}[i["impact"]]
+        lean = i["assets"].get(bucket, "neutral")
+        score += w * (1 if lean == "bullish" else -1 if lean == "bearish" else 0)
+        high += i["impact"] == "high"
+    norm = round(score / max(len(items) * 3, 1), 2) if items else 0.0
+
+    return {
+        "items": items,
+        "sentiment": {
+            "symbol": symbol.upper(), "bucket": bucket, "score": norm,
+            "label": "bullish" if norm > 0.15 else "bearish" if norm < -0.15 else "neutral",
+            "articles": len(items), "high_impact": high,
+        },
+        "events": upcoming_events(_ccy_for(symbol), hours=48),
+        "stateless": True,
+    }
+
+
+def _ccy_for(symbol: str) -> str:
+    s = symbol.upper()
+    if s.startswith("XAU") or s.startswith("XAG") or "USD" in s:
+        return "USD"
+    return "USD"
+
+
 def feed_status() -> list[dict]:
     """Which feeds are reachable from this machine. Pure diagnostics - some
     networks block some publishers, and a silent zero is unhelpful."""
@@ -460,7 +564,7 @@ def ingest(limit_per_feed: int = 12, max_tag: int = 8,
     # Store everything first, so the panel has content even if the AI is down.
     opinion = 0
     for item in fresh:
-        if is_opinion(item["title"]):
+        if is_opinion(item["title"], item.get("source", "")):
             opinion += 1
             continue
         store_raw(item["title"], item.get("summary", ""), item.get("source", ""),
@@ -468,7 +572,7 @@ def ingest(limit_per_feed: int = 12, max_tag: int = 8,
 
     # Spend the tagging budget on headlines that could plausibly matter.
     candidates = [i for i in fresh
-                  if not is_opinion(i["title"])
+                  if not is_opinion(i["title"], i.get("source", ""))
                   and looks_relevant(i["title"], i.get("summary", ""))]
     batch_to_tag = candidates[:max_tag]
     tagged, tag_errors = 0, 0
