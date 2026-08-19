@@ -18,7 +18,7 @@ python test_offline.py        # runs with no key and no network
 uvicorn app.main:app --reload
 ```
 
-Open http://localhost:8000/docs for the interactive API.
+Open https://api.realflylink.com/docs for the interactive API.
 
 Without a market data provider configured, the app serves **synthetic** candles
 so you can develop offline. Signals are blocked on synthetic data — the gate

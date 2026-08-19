@@ -522,6 +522,32 @@ def get_candles(
     return df, "synthetic"
 
 
+def background_refresh(symbol: str, timeframe: str) -> None:
+    """Proactively refresh an unmetered provider so the cache is always warm.
+
+    Called after serving a cached response. By the time the browser polls
+    again (1s later) the new data is already in the cache, so the user
+    sees a fresh price with zero waiting.
+    """
+    import threading
+    def _work():
+        try:
+            chain = chain_for(symbol)
+            for name in chain:
+                if not _configured(name):
+                    continue
+                src = cache.get(symbol, timeframe)
+                if src and src[1].split(":")[0] in cache.UNMETERED:
+                    # Force a fresh fetch by clearing just this entry
+                    with cache._lock:
+                        cache._cache.pop((symbol.upper(), timeframe), None)
+                    get_candles(symbol, timeframe)
+                    break
+        except Exception:
+            pass
+    threading.Thread(target=_work, daemon=True).start()
+
+
 def session_state(df: pd.DataFrame, timeframe: str) -> dict:
     """Detect stale / frozen data - the weekend-gold case.
 

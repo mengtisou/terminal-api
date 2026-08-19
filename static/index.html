@@ -167,15 +167,17 @@
   .zone{background:#0f151d;border:1px solid var(--line);border-left-width:3px;
         border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:11.5px}
   .zone.dem{border-left-color:var(--up)} .zone.sup{border-left-color:var(--down)}
-  .news-item{padding:12px 0;border-bottom:1px solid var(--line)}
+  .news-item{padding:13px 0;border-bottom:1px solid var(--line)}
   .news-item:last-child{border-bottom:0}
-  .news-head{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+  .news-head{display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:nowrap;overflow:hidden}
+  .news-src{font-size:10px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .news-time{font-size:10px;color:var(--dim);margin-left:auto;white-space:nowrap;flex-shrink:0}
   .imp{font-size:9px;font-weight:600;letter-spacing:.7px;padding:2px 6px;border-radius:3px;text-transform:uppercase}
   .imp.high{background:#3d1418;color:#f5827f}
   .imp.medium{background:#3a2c0c;color:#f0b84a}
   .imp.low{background:#1c242f;color:var(--muted)}
   .news-title{font-size:13px;line-height:1.45;font-weight:500;margin-bottom:7px}
-  .news-title a{color:var(--text);text-decoration:none}
+  .news-title a{color:var(--text);text-decoration:none;display:block}
   .news-title a:hover{color:var(--accent)}
   .tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
   .tag{font-size:10px;padding:2px 6px;border-radius:3px;background:#131a23;color:var(--dim)}
@@ -463,7 +465,7 @@ const API = (() => {
   if (location.protocol.startsWith("http") && location.port === "8000") {
     return location.origin;
   }
-  return "http://localhost:8000";
+  return "https://api.realflylink.com";
 })();
 
 // Access key for a hosted backend. Passed once as ?key=... then remembered,
@@ -778,6 +780,26 @@ function addLine(price,color,title,style=LWC.LineStyle.Dashed,width=1){
 let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
 let lastHeavy = 0;
 
+// Fast price update — just the latest tick, no indicators, returns in <50ms
+async function loadPrice(){
+  try{
+    const r = await fetch(`${API}/price/${symbol}?timeframe=${timeframe}`);
+    if(!r.ok) return;
+    const d = await r.json();
+    const priceEl = document.getElementById("price");
+    if(priceEl && d.price){
+      const prev = parseFloat(priceEl.textContent.replace(/,/g,"")) || 0;
+      priceEl.textContent = d.price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+      priceEl.style.color = d.price > prev ? "var(--up)" : d.price < prev ? "var(--down)" : "";
+    }
+    const agoEl = document.getElementById("ago");
+    if(agoEl) agoEl.textContent = "live";
+    const srcEl = document.getElementById("src");
+    if(srcEl && d.data_source) srcEl.textContent = d.data_source;
+    marketOpen = true;
+  }catch{}
+}
+
 async function loadChart(){
   let d;
   try{
@@ -883,21 +905,29 @@ let autoOn = true, pollTimer = null;
 let pollSeconds = 1;
 try{ pollSeconds = +(localStorage.getItem("poll") || 1); }catch{}
 
+let pricePollTimer = null;
+
 function schedule(){
   clearTimeout(pollTimer);
   if(!autoOn) return;
-  // Nothing changes while the market is shut, and a hidden tab does not need
-  // updating at all - both are free savings on a metered provider.
   const hidden = document.hidden;
-  // When closed or hidden, back off aggressively to save quota on Hetzner too.
-  const wait = hidden ? 300000
-             : !marketOpen ? 60000
-             : pollSeconds * 1000;
+  const wait = hidden ? 300000 : !marketOpen ? 60000 : pollSeconds * 1000;
   pollTimer = setTimeout(async ()=>{ await loadChart(); schedule(); }, wait);
 }
 
+// Fast price ticker — updates every second using the lightweight /price endpoint.
+// Full candle reload happens on the slower schedule above.
+function schedulePrice(){
+  clearTimeout(pricePollTimer);
+  if(!autoOn || !marketOpen) return;
+  pricePollTimer = setTimeout(async ()=>{
+    await loadPrice();
+    schedulePrice();
+  }, 1000);
+}
+
 document.addEventListener("visibilitychange", ()=>{
-  if(!document.hidden && autoOn){ loadChart(); }
+  if(!document.hidden && autoOn){ loadChart(); schedulePrice(); }
   schedule();
 });
 
@@ -1210,10 +1240,12 @@ async function loadNews(){
 
     const sent = (d && d.sentiment) || {};
     const sentCol = sent.label==="bullish"?"var(--up)":sent.label==="bearish"?"var(--down)":"var(--muted)";
-    let html = `<div style="display:flex;justify-content:space-between;font-size:11px;
-      color:var(--dim);margin-bottom:10px">
+    let html = `<div style="display:flex;justify-content:space-between;align-items:center;
+      font-size:11px;color:var(--dim);padding-bottom:10px;margin-bottom:10px;
+      border-bottom:1px solid var(--line)">
       <span>gold sentiment <b style="color:${sentCol}">${sent.label||"neutral"}</b></span>
-      <span>${sent.articles||items.length} stories${sent.high_impact?" · "+sent.high_impact+" high impact":""}</span>
+      <span style="text-align:right">${sent.articles||items.length} stories${sent.high_impact
+        ?" · <b style='color:var(--warn)'>"+sent.high_impact+" high</b>":""}</span>
     </div>`;
 
     html += items.map(i=>{
@@ -1232,10 +1264,12 @@ async function loadNews(){
       return `<div class="news-item">
         <div class="news-head">
           <span class="imp ${i.impact}">${i.impact}</span>
-          <span style="font-size:10px;color:var(--dim)">${i.source||""}</span>
-          <span style="font-size:10px;color:var(--dim);margin-left:auto" title="${i.published_at}">${t}</span>
+          <span class="news-src">${i.source||""}</span>
+          <span class="news-time" title="${i.published_at}">${t}</span>
         </div>
-        <div class="news-title">${i.url?`<a href="${i.url}" target="_blank" style="color:inherit;text-decoration:none">${i.title}</a>`:i.title}</div>
+        <div class="news-title">${i.url
+          ? `<a href="${i.url}" target="_blank">${i.title}</a>`
+          : i.title}</div>
         <div class="tags">${tags}</div>
         ${i.takeaway?`<div class="take"><span>⚡</span><span>${i.takeaway}</span></div>`:""}
       </div>`;
@@ -2008,7 +2042,7 @@ initChart();
 initSheet();
 loadTimeframes();
 loadIndicatorCatalog();
-loadChart().then(schedule);
+loadChart().then(()=>{ schedule(); schedulePrice(); });
 loadProviders();
 
 // --- news button wiring ---

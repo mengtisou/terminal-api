@@ -24,4 +24,4 @@ jobs:
             pip3 install -r /tmp/req.txt --break-system-packages -q
             supervisorctl restart zoqira
             sleep 5
-            curl -sf http://localhost:8000/health > /dev/null && echo "OK" || echo "FAILED"
+            curl -sf https://api.realflylink.com/health > /dev/null && echo "OK" || echo "FAILED"

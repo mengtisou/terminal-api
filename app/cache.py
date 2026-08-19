@@ -86,9 +86,13 @@ def budget_ttl() -> int | None:
 
 
 def ttl_for(timeframe: str, source: str | None = None) -> int:
-    # A local terminal costs nothing to query - do not throttle it.
+    # Unmetered providers: cache briefly so browser requests return from cache
+    # instantly while the server keeps data fresh in the background.
     if source and source.split(":")[0] in UNMETERED:
-        return 1
+        # MT5 is a local IPC call (~0ms) - 1s is fine
+        # OANDA takes 2-3s per request - cache 2s so polls are instant
+        src = source.split(":")[0]
+        return 1 if src == "mt5" else 2
     if _budget_mode:
         b = budget_ttl()
         if b is not None:
@@ -110,7 +114,9 @@ DAILY_LIMIT = {"twelvedata": 800, "finnhub": 86400, "oanda": None,
 
 # Providers with no request cost. Cached only briefly, so the chart is as live
 # as the terminal is.
-UNMETERED = {"mt5", "synthetic"}
+# No request limits on these providers - cache briefly so the browser
+# gets instant responses while the server stays close to real-time.
+UNMETERED = {"mt5", "oanda", "binance", "synthetic"}
 
 
 def _today() -> str:
