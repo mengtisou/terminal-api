@@ -75,7 +75,7 @@ _STATIC = Path(__file__).resolve().parent.parent / "static"
 
 @app.get("/")
 def terminal():
-    """Serve the chart UI at https://terminal-api-two.vercel.app/?api=https://api.realflylink.com/"""
+    """Serve the chart UI at https://api.realflylink.com/"""
     index = _STATIC / "index.html"
     if not index.exists():
         raise HTTPException(404, "static/index.html not found")

@@ -338,7 +338,7 @@ def main():
     if ok:
         print("\n  Now restart the server:")
         print("    python -m uvicorn app.main:app --reload")
-        print("  Then check https://terminal-api-two.vercel.app/?api=https://api.realflylink.com/providers\n")
+        print("  Then check https://api.realflylink.com/providers\n")
     return 0 if ok else 1
 
 
