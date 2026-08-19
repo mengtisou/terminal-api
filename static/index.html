@@ -1982,7 +1982,11 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   if(t.dataset.p === "smc") loadSMC();
 });
 
-document.querySelectorAll("[data-preset]").forEach(b=>b.onclick=()=>preset(b.dataset.preset));
+// Chat presets only. The layout buttons use [data-preset-view], and a bare
+// [data-preset] selector matches those too - which fired the chat handler
+// with an invalid name and silently did nothing.
+document.querySelectorAll("[data-preset]:not([data-preset-view])")
+  .forEach(b=>b.onclick=()=>preset(b.dataset.preset));
 document.getElementById("gen").onclick = generate;
 document.getElementById("reload").onclick = ()=>{ loadChart(); schedule(); };
 
