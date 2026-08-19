@@ -310,7 +310,7 @@ def main():
     if ok:
         print("\n  Now restart the server:")
         print("    python -m uvicorn app.main:app --reload")
-        print("  Then check https://terminal-api-two.vercel.app/providers\n")
+        print("  Then check https://terminal-api-two.vercel.app/?api=https://terminal-ai.onrender.com/providers\n")
     return 0 if ok else 1
 
 

@@ -463,7 +463,7 @@ const API = (() => {
   if (location.protocol.startsWith("http") && location.port === "8000") {
     return location.origin;
   }
-  return "https://terminal-api-two.vercel.app";
+  return "http://localhost:8000";
 })();
 
 // Access key for a hosted backend. Passed once as ?key=... then remembered,
@@ -1109,14 +1109,30 @@ function ago(iso){
 }
 
 let newsFilter = "all";
+// Serverless backends have no memory between requests, so the stored-news
+// endpoints return nothing there. Detected once, then we use the live path.
+let newsStateless = null;
+
+async function detectNewsMode(){
+  if(newsStateless !== null) return newsStateless;
+  try{
+    const d = await (await fetch(`${API}/news/${symbol}?limit=1`)).json();
+    // A backend with memory returns stored items after a pull; one without
+    // always returns an empty list no matter how many times you pull.
+    newsStateless = !d.items || d.items.length === 0;
+  }catch{ newsStateless = true; }
+  return newsStateless;
+}
 let lastNewsTs = null, newsAutoTimer = null;
 
 async function autoRefreshNews(){
   try{
-    const qs = lastNewsTs ? "&since=" + encodeURIComponent(lastNewsTs) : "";
-    const d = await (await fetch(`${API}/news/latest?symbol=${symbol}${qs}`)).json();
+    const d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=40`)).json();
     if(!d.items || !d.items.length) return;
-    lastNewsTs = d.items[0].published_at;
+
+    const newest = d.items[0].published_at;
+    if(lastNewsTs && newest <= lastNewsTs) return;   // nothing new
+    lastNewsTs = newest;
     if(document.getElementById("p-news").classList.contains("on")){
       loadNews();
     }else{
