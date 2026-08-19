@@ -1,0 +1,27 @@
+name: Deploy to Hetzner
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.HETZNER_HOST }}
+          username: ${{ secrets.HETZNER_USER }}
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /root/terminal-api
+            git pull origin main
+            grep -v -i "MetaTrader5" requirements.txt > /tmp/req.txt
+            pip3 install -r /tmp/req.txt --break-system-packages -q
+            supervisorctl restart zoqira
+            sleep 5
+            curl -sf http://localhost:8000/health > /dev/null && echo "OK" || echo "FAILED"
