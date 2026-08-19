@@ -48,7 +48,11 @@
   button.primary{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
 
   main{flex:1;display:flex;min-height:0}
-  #chartWrap{flex:1;position:relative;min-width:0}
+  /* chartWrap is a flex column: chartCol takes the space, sub-panes stack
+     below it. Without an explicit min-height the absolutely-positioned #chart
+     inside collapses to zero and nothing renders. */
+  #chartWrap{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
+  #chartCol{flex:1;position:relative;min-height:200px}
   #chart{position:absolute;inset:0}
   #indBtn{position:relative}
   .indpop{position:absolute;top:46px;right:120px;z-index:60;background:var(--panel);
@@ -355,9 +359,9 @@
 </div>
 
 <main>
-  <div id="chartWrap" style="display:flex;flex-direction:column">
-    <div id="chartCol" style="flex:1;position:relative;min-height:0">
-      <div id="chart" style="position:absolute;inset:0"></div>
+  <div id="chartWrap">
+    <div id="chartCol">
+      <div id="chart"></div>
       <canvas id="zoneCanvas" style="position:absolute;inset:0;pointer-events:none;z-index:2"></canvas>
       <div id="legend"></div>
       <div id="evt"></div>
@@ -530,9 +534,6 @@ async function checkBackend(retryCount = 0){
     return false;
   }
 }
-    return false;
-  }
-}
 
 function sessionBoundary(symbol, open){
   if(/BTC|ETH/.test(symbol)) return "24/7";
@@ -691,6 +692,10 @@ let priceLines = [];
 // ---------- chart ----------
 function initChart(){
   chart = LWC.createChart(document.getElementById("chart"), {
+    // autoSize makes the chart track its container. Without it Lightweight
+    // Charts defaults to a fixed size and renders nothing useful inside a
+    // flex layout - which is why the chart area was blank.
+    autoSize: true,
     layout:{ background:{type:"solid",color:"#0d1117"}, textColor:"#8b98a8", fontSize:11 },
     grid:{ vertLines:{color:"#1a212b"}, horzLines:{color:"#1a212b"} },
     rightPriceScale:{ borderColor:"#232c38", scaleMargins:{top:.1,bottom:.1} },
@@ -751,15 +756,22 @@ function addLine(price,color,title,style=LWC.LineStyle.Dashed,width=1){
 
 let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
 let lastHeavy = 0;
+let hasLiveTick = false;   // true once a real tick feed is confirmed
+let lastBar = null;        // the forming candle, updated by the tick feed
 
-// Fast price update — just the latest tick, no indicators, returns in <50ms
+// Fast price update — real tick from OANDA/MT5, plus a live update of the
+// forming candle so the chart moves between full reloads.
 async function loadPrice(){
   try{
     const r = await fetch(`${API}/price/${symbol}?timeframe=${timeframe}`);
     if(!r.ok) return;
     const d = await r.json();
+    if(!d.price) return;
+
+    hasLiveTick = !!d.live;
+
     const priceEl = document.getElementById("px");
-    if(priceEl && d.price){
+    if(priceEl){
       const prev = parseFloat(priceEl.textContent.replace(/,/g,"")) || 0;
       priceEl.textContent = d.price.toLocaleString("en-US",
         {minimumFractionDigits:2, maximumFractionDigits:2});
@@ -767,9 +779,22 @@ async function loadPrice(){
         priceEl.style.color = d.price > prev ? "var(--up)" : "var(--down)";
         setTimeout(()=>{ priceEl.style.color = ""; }, 600);
       }
-      // Show the spread on hover when we have a real tick
       if(d.bid && d.ask) priceEl.title = `bid ${d.bid} / ask ${d.ask} · spread ${d.spread}`;
     }
+
+    // Push the tick into the last candle so the chart moves in real time.
+    // update() only touches the final bar - far cheaper than setData() and
+    // it keeps the user's zoom and scroll position exactly where it was.
+    if(lastBar && candles && d.live){
+      lastBar = {
+        ...lastBar,
+        high: Math.max(lastBar.high, d.price),
+        low: Math.min(lastBar.low, d.price),
+        close: d.price,
+      };
+      try{ candles.update(lastBar); }catch{}
+    }
+
     const agoEl = document.getElementById("ago");
     if(agoEl) agoEl.textContent = d.live ? "live" : "0s ago";
   }catch{}
@@ -810,15 +835,21 @@ async function loadChart(){
   }
 
   const last = sb.at(-1);
+  lastBar = last;              // hand the forming candle to the tick updater
   drawLegend(last);
   document.getElementById("sym").textContent = d.symbol;
 
-  const px = document.getElementById("px");
-  px.textContent = last.close.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  // Flash green/red when the price actually moves, so you can see it is live.
-  if(lastClose !== null && last.close !== lastClose){
-    px.style.color = last.close > lastClose ? "var(--up)" : "var(--down)";
-    setTimeout(()=>px.style.color="", 700);
+  // Only write the price here when there is NO live tick feed. Otherwise the
+  // candle close (up to a full candle old) would keep overwriting the real
+  // tick price, which is what made the number jump back and forth.
+  if(!hasLiveTick){
+    const px = document.getElementById("px");
+    px.textContent = last.close.toLocaleString(undefined,
+      {minimumFractionDigits:2, maximumFractionDigits:2});
+    if(lastClose !== null && last.close !== lastClose){
+      px.style.color = last.close > lastClose ? "var(--up)" : "var(--down)";
+      setTimeout(()=>px.style.color="", 700);
+    }
   }
   lastClose = last.close;
 
@@ -886,7 +917,11 @@ function schedule(){
   clearTimeout(pollTimer);
   if(!autoOn) return;
   const hidden = document.hidden;
-  const wait = hidden ? 300000 : !marketOpen ? 60000 : pollSeconds * 1000;
+  // With a live tick feed the chart already moves every second, so the full
+  // reload (300 candles + indicators, 2-4s of work) can run far less often.
+  // Without ticks it has to carry the whole update itself.
+  const base = hasLiveTick ? 15000 : pollSeconds * 1000;
+  const wait = hidden ? 300000 : !marketOpen ? 60000 : base;
   pollTimer = setTimeout(async ()=>{ await loadChart(); schedule(); }, wait);
 }
 
@@ -1653,6 +1688,7 @@ function makeSubPane(key, label, height){
 
   const c = LWC.createChart(wrap, {
     height,
+    width: wrap.clientWidth || document.getElementById("chartCol").clientWidth,
     layout:{ background:{type:"solid",color:"#0d1117"}, textColor:"#8b98a8", fontSize:10 },
     grid:{ vertLines:{color:"#1a212b"}, horzLines:{color:"#1a212b"} },
     rightPriceScale:{ borderColor:"#232c38" },
