@@ -11,6 +11,7 @@ arrives from five feeds with slightly different wording.
 from __future__ import annotations
 
 import datetime as dt
+import time as _time
 import hashlib
 import logging
 import os
@@ -438,7 +439,8 @@ def prune_old(hours: int = 48) -> int:
 
 
 def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
-               limit_per_feed: int = 10, ai_tag: int = 6) -> dict:
+               limit_per_feed: int = 10, ai_tag: int = 3,
+               ai_budget_s: float = 20.0) -> dict:
     """Fetch and score headlines in one request, storing nothing.
 
     Serverless platforms give each request a fresh process, so the in-memory
@@ -501,9 +503,17 @@ def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
     # top few - a full page of AI calls is slow and most low-impact items do
     # not repay the cost.
     if ai_tag:
-        worth_it = [i for i in items if i["impact"] in ("high", "medium")][:ai_tag]
+        # Only the very top items, and only within a strict time budget. The
+        # free-tier rate limiter spaces calls ~7.5s apart, so an unbounded
+        # batch will always outlast the browser's patience.
+        deadline = _time.monotonic() + ai_budget_s
+        worth_it = [i for i in items if i["impact"] == "high"][:ai_tag]
+        if not worth_it:
+            worth_it = [i for i in items if i["impact"] == "medium"][:ai_tag]
         if worth_it:
             def _enrich(item):
+                if _time.monotonic() > deadline:
+                    return None          # out of time - keep the rule score
                 try:
                     tags = json_call(
                         role="cheap", system=TAG_SYSTEM,
@@ -528,6 +538,9 @@ def fetch_live(symbol: str = "XAUUSD", limit: int = 30,
 
             with ThreadPoolExecutor(max_workers=3) as pool:
                 list(pool.map(_enrich, worth_it))
+            log.info("live news: AI-tagged %d/%d in %.1fs",
+                     sum(1 for i in worth_it if i.get("scored_by") == "ai"),
+                     len(worth_it), ai_budget_s - (deadline - _time.monotonic()))
 
             # Re-sort in case the AI changed any impact ratings
             items.sort(key=lambda i: (rank[i["impact"]], i["published_at"]), reverse=True)

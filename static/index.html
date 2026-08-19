@@ -1195,6 +1195,7 @@ function ago(iso){
 }
 
 let newsFilter = "all";
+let newsEnriching = false;
 // Serverless backends have no memory between requests, so the stored-news
 // endpoints return nothing there. Detected once, then we use the live path.
 let newsStateless = null;
@@ -1240,70 +1241,93 @@ async function loadNews(){
   const out = document.getElementById("newsOut");
   if(!out) return;
   try{
+    // Phase 1 - instant. Keyword scoring only, renders in under a second.
     let d;
     try{
-      d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=60`)).json();
+      d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=60&ai_tag=0`)).json();
     }catch{
       d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json();
     }
     if(!d || !d.items || !d.items.length){
       try{ d = await (await fetch(`${API}/news/${symbol}?limit=60`)).json(); }catch{}
     }
+    renderNews(d);
 
-    const RANK = {low:1, medium:2, high:3};
-    let items = (d && d.items) || [];
-    if(newsFilter === "scored") items = items.filter(i => i.tagged || i.scored_by);
-    if(newsFilter === "medium") items = items.filter(i => RANK[i.impact] >= 2);
-    if(newsFilter === "high")   items = items.filter(i => i.impact === "high");
-
-    items.sort((a,b)=> (RANK[b.impact]||1)-(RANK[a.impact]||1) ||
-      (new Date(b.published_at)-new Date(a.published_at)));
-    items = items.slice(0,30);
-    if(items.length) lastNewsTs = items[0].published_at;
-
-    if(!items.length){
-      out.innerHTML = `<div class="empty">No headlines yet.<br>Tap "Pull latest news".</div>`;
-      return;
+    // Phase 2 - background. Model-scored version swaps in when ready, so the
+    // takeaway lines appear without ever making the user wait for them.
+    if(!newsEnriching){
+      newsEnriching = true;
+      fetch(`${API}/news/live?symbol=${symbol}&limit=60&ai_tag=3`)
+        .then(r => r.json())
+        .then(rich => {
+          if(rich?.items?.length &&
+             document.getElementById("p-news").classList.contains("on")){
+            renderNews(rich);
+          }
+        })
+        .catch(()=>{})
+        .finally(()=>{ newsEnriching = false; });
     }
-
-    const sent = (d && d.sentiment) || {};
-    const sentCol = sent.label==="bullish"?"var(--up)":sent.label==="bearish"?"var(--down)":"var(--muted)";
-    let html = `<div style="display:flex;justify-content:space-between;align-items:center;
-      font-size:11px;color:var(--dim);padding-bottom:10px;margin-bottom:10px;
-      border-bottom:1px solid var(--line)">
-      <span>gold sentiment <b style="color:${sentCol}">${sent.label||"neutral"}</b></span>
-      <span style="text-align:right">${sent.articles||items.length} stories${sent.high_impact
-        ?" · <b style='color:var(--warn)'>"+sent.high_impact+" high</b>":""}</span>
-    </div>`;
-
-    html += items.map(i=>{
-      const scored = i.tagged || i.scored_by;
-      const assets = i.assets || {};
-      const tags = scored
-        ? Object.entries(assets).map(([k,v])=>{
-            const [c,arrow] = DIR[v]||DIR.neutral;
-            return `<span class="tag">${k}<b class="${c}">${arrow} ${v}</b></span>`;
-          }).join("")+(i.scored_by==="rules"
-            ?`<span class="tag" style="color:var(--dim)" title="keyword rules">rules</span>`:"")
-        : `<span class="tag" style="color:var(--dim)">no signal</span>`;
-      const ms = Date.now()-new Date(i.published_at).getTime();
-      const s2 = Math.floor(ms/1000);
-      const t = s2<60?"just now":s2<3600?Math.floor(s2/60)+"m ago":s2<86400?Math.floor(s2/3600)+"h ago":Math.floor(s2/86400)+"d ago";
-      return `<div class="news-item">
-        <div class="news-head">
-          <span class="imp ${i.impact}">${i.impact}</span>
-          <span class="news-src">${i.source||""}</span>
-          <span class="news-time" title="${i.published_at}">${t}</span>
-        </div>
-        <div class="news-title">${i.url
-          ? `<a href="${i.url}" target="_blank">${i.title}</a>`
-          : i.title}</div>
-        <div class="tags">${tags}</div>
-        ${i.takeaway?`<div class="take"><span>⚡</span><span>${i.takeaway}</span></div>`:""}
-      </div>`;
-    }).join("");
-    out.innerHTML = html;
   }catch(e){ out.innerHTML = `<div class="warn">${e.message}</div>`; }
+}
+
+function renderNews(d){
+  const out = document.getElementById("newsOut");
+  if(!out) return;
+
+  const RANK = {low:1, medium:2, high:3};
+  let items = (d && d.items) || [];
+  if(newsFilter === "scored") items = items.filter(i => i.tagged || i.scored_by);
+  if(newsFilter === "medium") items = items.filter(i => RANK[i.impact] >= 2);
+  if(newsFilter === "high")   items = items.filter(i => i.impact === "high");
+
+  items.sort((a,b)=> (RANK[b.impact]||1)-(RANK[a.impact]||1) ||
+    (new Date(b.published_at)-new Date(a.published_at)));
+  items = items.slice(0,30);
+  if(items.length) lastNewsTs = items[0].published_at;
+
+  if(!items.length){
+    out.innerHTML = `<div class="empty">No headlines yet.<br>Tap "Pull latest news".</div>`;
+    return;
+  }
+
+  const sent = (d && d.sentiment) || {};
+  const sentCol = sent.label==="bullish"?"var(--up)":sent.label==="bearish"?"var(--down)":"var(--muted)";
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;
+    font-size:11px;color:var(--dim);padding-bottom:10px;margin-bottom:10px;
+    border-bottom:1px solid var(--line)">
+    <span>gold sentiment <b style="color:${sentCol}">${sent.label||"neutral"}</b></span>
+    <span style="text-align:right">${sent.articles||items.length} stories${sent.high_impact
+      ?" · <b style='color:var(--warn)'>"+sent.high_impact+" high</b>":""}</span>
+  </div>`;
+
+  html += items.map(i=>{
+    const scored = i.tagged || i.scored_by;
+    const assets = i.assets || {};
+    const tags = scored
+      ? Object.entries(assets).map(([k,v])=>{
+          const [c,arrow] = DIR[v]||DIR.neutral;
+          return `<span class="tag">${k}<b class="${c}">${arrow} ${v}</b></span>`;
+        }).join("")+(i.scored_by==="rules"
+          ?`<span class="tag" style="color:var(--dim)" title="keyword rules">rules</span>`:"")
+      : `<span class="tag" style="color:var(--dim)">no signal</span>`;
+    const ms = Date.now()-new Date(i.published_at).getTime();
+    const s2 = Math.floor(ms/1000);
+    const t = s2<60?"just now":s2<3600?Math.floor(s2/60)+"m ago":s2<86400?Math.floor(s2/3600)+"h ago":Math.floor(s2/86400)+"d ago";
+    return `<div class="news-item">
+      <div class="news-head">
+        <span class="imp ${i.impact}">${i.impact}</span>
+        <span class="news-src">${i.source||""}</span>
+        <span class="news-time" title="${i.published_at}">${t}</span>
+      </div>
+      <div class="news-title">${i.url
+        ? `<a href="${i.url}" target="_blank">${i.title}</a>`
+        : i.title}</div>
+      <div class="tags">${tags}</div>
+      ${i.takeaway?`<div class="take"><span>⚡</span><span>${i.takeaway}</span></div>`:""}
+    </div>`;
+  }).join("");
+  out.innerHTML = html;
 }
 
 async function pullNews(){
