@@ -31,4 +31,4 @@ jobs:
 
             echo "=== Health check ==="
             sleep 5
-            curl -sf http://localhost:8000/health > /dev/null && echo "OK" || echo "FAILED - check logs"
+            curl -sf https://api.realflylink.com//health > /dev/null && echo "OK" || echo "FAILED - check logs"
