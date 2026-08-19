@@ -59,6 +59,13 @@ FEED_TIMEOUT = 8
 
 # Opinion and listicle patterns. These are the shapes columns take, and none of
 # them report an event.
+# Sources that publish almost exclusively off-topic content for a gold terminal.
+# Letting them through wastes quota and adds noise.
+OFF_TOPIC_SOURCES = {
+    "cnbc", "disney", "abc", "nbc", "cbs", "bbc sport",
+    "techcrunch", "wired", "engadget", "the verge",
+}
+
 OPINION_PATTERNS = (
     r"^\d+\s+(bold|top|best|worst|key|things|reasons|stocks|ways)",
     r"\b(bold predictions|predictions for|outlook for \d{4}|year ahead)\b",
@@ -78,8 +85,10 @@ OPINION_PATTERNS = (
 _OPINION_RE = [re.compile(p, re.I) for p in OPINION_PATTERNS]
 
 
-def is_opinion(title: str) -> bool:
-    """True for columns, listicles and speculation rather than reported events."""
+def is_opinion(title: str, source: str = "") -> bool:
+    """True for columns, listicles, and clearly off-topic sources."""
+    if source and any(s in source.lower() for s in OFF_TOPIC_SOURCES):
+        return True
     t = title.strip()
     return any(rx.search(t) for rx in _OPINION_RE)
 
@@ -460,7 +469,7 @@ def ingest(limit_per_feed: int = 12, max_tag: int = 8,
     # Store everything first, so the panel has content even if the AI is down.
     opinion = 0
     for item in fresh:
-        if is_opinion(item["title"]):
+        if is_opinion(item["title"], item.get("source", "")):
             opinion += 1
             continue
         store_raw(item["title"], item.get("summary", ""), item.get("source", ""),
@@ -468,7 +477,7 @@ def ingest(limit_per_feed: int = 12, max_tag: int = 8,
 
     # Spend the tagging budget on headlines that could plausibly matter.
     candidates = [i for i in fresh
-                  if not is_opinion(i["title"])
+                  if not is_opinion(i["title"], i.get("source", ""))
                   and looks_relevant(i["title"], i.get("summary", ""))]
     batch_to_tag = candidates[:max_tag]
     tagged, tag_errors = 0, 0
