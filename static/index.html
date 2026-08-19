@@ -247,7 +247,7 @@
     #legend{font-size:9.5px;top:32px}
 
     .indpop{right:8px;left:8px;width:auto;top:auto;bottom:8px;max-height:70dvh}
-    .pop{right:8px;left:8px;width:auto;max-height:75dvh;overflow-y:auto;overscroll-behavior:contain}
+    .pop{right:8px;left:8px;width:auto;max-height:70dvh;overflow-y:auto}
     .tfpop{left:8px;right:8px;transform:none}
     .presets button{padding:11px 6px}
   }
@@ -1105,62 +1105,6 @@ function ago(iso){
 }
 
 let newsFilter = "all";
-let lastNewsTs = null, newsAutoTimer = null;
-
-async function autoRefreshNews(){
-  try{
-    const qs = lastNewsTs ? "&since=" + encodeURIComponent(lastNewsTs) : "";
-    const d = await (await fetch(`${API}/news/latest?symbol=${symbol}${qs}`)).json();
-    if(!d.items || !d.items.length) return;
-    lastNewsTs = d.items[0].published_at;
-    if(document.getElementById("p-news").classList.contains("on")){
-      loadNews();
-    }else{
-      const tab = document.querySelector('[data-p="news"]');
-      if(tab && !tab.querySelector(".bdot")){
-        const dot = document.createElement("span");
-        dot.className = "bdot";
-        dot.style.cssText = "width:6px;height:6px;background:var(--up);border-radius:50%;display:inline-block;margin-left:5px;vertical-align:middle";
-        tab.appendChild(dot);
-      }
-    }
-  }catch{}
-}
-function startNewsAuto(){ newsAutoTimer = setInterval(autoRefreshNews, 60000); }
-let lastNewsTs = null;
-let newsAutoTimer = null;
-
-async function autoRefreshNews(){
-  try{
-    const url = `${API}/news/latest?symbol=${symbol}` +
-                (lastNewsTs ? `&since=${encodeURIComponent(lastNewsTs)}` : "");
-    const d = await (await fetch(url)).json();
-    if(!d.items?.length) return;
-    lastNewsTs = d.items[0].published_at;
-    // Only do a full redraw when the panel is visible - otherwise just remember
-    // that new content arrived and let the next tab-open draw it.
-    if(document.getElementById("p-news").classList.contains("on")){
-      loadNews();
-    }else{
-      const tab = document.querySelector(".tab[data-p=\'news\']");
-      if(tab && !tab.querySelector(".badge-dot")){
-        const dot = document.createElement("span");
-        dot.className = "badge-dot";
-        dot.style.cssText = "width:6px;height:6px;background:var(--up);border-radius:50%;display:inline-block;margin-left:5px";
-        tab.appendChild(dot);
-      }
-    }
-  }catch{ /* silent fail - a missed poll is fine */ }
-}
-
-function startNewsAutoRefresh(){
-  stopNewsAutoRefresh();
-  newsAutoTimer = setInterval(autoRefreshNews, 60000);
-}
-
-function stopNewsAutoRefresh(){
-  if(newsAutoTimer){ clearInterval(newsAutoTimer); newsAutoTimer = null; }
-}
 
 async function loadNews(){
   const out = document.getElementById("newsOut");
@@ -1180,7 +1124,6 @@ async function loadNews(){
       return r || (new Date(b.published_at) - new Date(a.published_at));
     });
     items = items.slice(0, 30);
-    if(items.length) lastNewsTs = items[0].published_at;
 
     d.items = items;
     if(!d.items.length){
@@ -1296,46 +1239,29 @@ async function pullNews(){
 async function showFeedDiagnostics(hint){
   const out = document.getElementById("newsOut");
   try{
-    const res = await fetch(`${API}/news/feeds`, {signal: AbortSignal.timeout(15000)});
-    if(!res.ok) throw new Error("feed check failed");
-    const d = await res.json();
-    const feeds = d.feeds || [];
-    const rows = feeds.map(f=>{
+    const d = await (await fetch(`${API}/news/feeds`)).json();
+    const rows = d.feeds.map(f=>{
       const ok = f.ok;
-      return `<div class="smcrow">
-        <span style="color:${ok ? "var(--up)" : "var(--down)"};flex:0 0 36px">${ok ? "OK" : "FAIL"}</span>
-        <span>${f.name}</span>
-        <span style="color:var(--dim);font-size:10.5px">${ok ? f.headlines + " items" : (f.error || "HTTP " + f.status)}</span>
-      </div>`;
+      return `<div class="smcrow"><span style="color:${ok ? "var(--up)" : "var(--down)"}">
+        ${ok ? "OK" : "FAIL"}</span><span>${f.name}</span>
+        <span style="color:var(--dim);font-size:11px">${ok ? f.headlines + " items" : (f.error || "HTTP " + f.status)}</span></div>`;
     }).join("");
-    const working = feeds.filter(f=>f.ok).length;
+    const working = d.feeds.filter(f=>f.ok).length;
     out.innerHTML = `<div class="warn">${hint || "News fetch failed."}</div>
-      ${feeds.length ? `<div class="smchead">RSS feeds — ${working}/${feeds.length} reachable</div>${rows}` : ""}
-      ${working === 0 ? `<div style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7;
-          background:#0f151d;border-radius:6px;padding:12px">
-        <b style="color:var(--text)">RSS feeds are geo-blocked on your network.</b><br>
-        Your Finnhub key bypasses this — it is an HTTPS API, not a scraped feed.<br><br>
-        Make sure your <code>.env</code> has:<br>
-        <code style="color:var(--accent)">FINNHUB_KEY=your-key</code><br><br>
-        Then restart the server and tap <b>Pull latest news</b>.
+      <div class="smchead">Feed check — ${working}/${d.feeds.length} reachable</div>${rows}
+      ${working === 0 ? `<div style="font-size:11.5px;color:var(--dim);margin-top:10px;line-height:1.55">
+        No feeds are reachable from this machine. Your ISP or a firewall may be
+        blocking them. A Finnhub key gives you a single API endpoint instead of
+        five publisher feeds:<br>
+        <code style="color:var(--muted)">python setup_key.py finnhub YOUR-KEY</code>
       </div>` : ""}`;
   }catch{
-    // The feeds endpoint itself failed - show a simple status message
-    out.innerHTML = `<div class="warn">${hint || "News fetch failed."}</div>
-      <div style="font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7;
-          background:#0f151d;border-radius:6px;padding:12px">
-        <b style="color:var(--text)">Using Finnhub as primary news source.</b><br>
-        RSS feeds may be blocked on your network, but Finnhub works via HTTPS API.<br><br>
-        If you see no news, check that <code style="color:var(--accent)">FINNHUB_KEY</code>
-        is set in your <code>.env</code> and restart the server.
-      </div>`;
+    out.innerHTML = `<div class="warn">${hint || "News fetch failed and the feed check is unreachable."}</div>`;
   }
 }
 
 document.getElementById("pullNews").onclick = pullNews;
 document.getElementById("refreshNews").onclick = loadNews;
-startNewsAuto();
-startNewsAutoRefresh();
 document.getElementById("clearNews").onclick = async ()=>{
   await fetch(`${API}/news`, {method:"DELETE"});
   document.getElementById("newsOut").innerHTML =
