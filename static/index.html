@@ -265,7 +265,12 @@
                max-height:34dvh;overflow-y:auto;font-size:10px}
     #btcPanel{display:none}
     #evt{left:8px;right:8px;top:6px;font-size:10.5px;justify-content:center}
-    #legend{font-size:9.5px;top:32px}
+    /* The indicator list is long enough to run under the price scale, so the
+       tail of it ("...Liquidity") collided with the price labels. Cap the
+       width and clamp to two lines instead of letting it sprawl. */
+    #legend{font-size:9.5px;top:32px;max-width:calc(100% - 96px);
+            display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+            overflow:hidden}
 
     .indpop{right:8px;left:8px;width:auto;top:auto;bottom:8px;max-height:70dvh}
     .pop{right:8px;left:8px;width:auto;max-height:75dvh;overflow-y:auto;overscroll-behavior:contain}

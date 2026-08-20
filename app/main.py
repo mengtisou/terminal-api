@@ -82,6 +82,29 @@ def terminal():
     return FileResponse(index)
 
 
+@app.get("/smc/ktr-debug/{symbol}")
+def ktr_debug(symbol: str, timeframe: str = "15m"):
+    """Every KTR convention side by side, to match against TradingView.
+
+    Compare the KTR+1/+2/+3 on your Pine chart against these rows. Whichever
+    boundary+anchor pair reproduces them is what the script uses, and that is
+    the one this port should adopt.
+    """
+    from .smc import ktr_variants
+    try:
+        df, source = get_candles(symbol, timeframe, 400)
+    except DataUnavailable as e:
+        raise HTTPException(503, str(e))
+    if df is None or df.empty:
+        raise HTTPException(503, "no candle data")
+    out = ktr_variants(df)
+    out["symbol"] = symbol
+    out["timeframe"] = timeframe
+    out["source"] = source
+    out["current_port_uses"] = "utc_midnight / from_OP"
+    return out
+
+
 @app.get("/smc/{symbol}")
 def smc_analysis(symbol: str, timeframe: str = "15m", swing: int = 10,
                  ktr_step: float = 0.40, cisd_run: int = 2):

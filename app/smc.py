@@ -114,6 +114,56 @@ def ktr(df: pd.DataFrame, step_pct: float = 0.40,
     }
 
 
+def ktr_variants(df: pd.DataFrame, step_pct: float = 0.40) -> dict:
+    """The same KTR ladder under every day-boundary and anchor convention.
+
+    This port and the Pine original disagree on two independent choices, and
+    from the numbers alone you cannot tell which one is off:
+
+      1. the day boundary - 00:00 UTC here, but spot metals conventionally
+         roll at 17:00 New York (21:00/22:00 UTC), which changes what
+         "today's open" and "yesterday's close" resolve to;
+      2. the anchor the +-n steps are measured from - OP here, MLP in Pine.
+
+    Rather than guess and quietly emit wrong levels, compute all of them and
+    let the chart decide: whichever row reproduces TradingView is the one the
+    script uses.
+    """
+    if df.empty:
+        return {"error": "no candles"}
+
+    price = float(df["close"].iloc[-1])
+    out = {"price": round(price, 5), "step_pct": step_pct, "variants": {}}
+
+    for bname, hour in (("utc_midnight", 0), ("ny_1700_edt", 21), ("ny_1700_est", 22)):
+        # Shift so the chosen boundary lands on midnight, group, then shift back.
+        shifted = df.index + pd.Timedelta(hours=24 - hour if hour else 0)
+        days = shifted.normalize()
+        today = df[days == days[-1]]
+        prev = df[days < days[-1]]
+        if today.empty:
+            continue
+
+        op = float(today["open"].iloc[0])
+        mlp = float(prev["close"].iloc[-1]) if len(prev) else None
+
+        row = {"OP": round(op, 5), "MLP": round(mlp, 5) if mlp else None,
+               "bars_today": int(len(today)), "anchored": {}}
+
+        for aname, anchor in (("from_OP", op), ("from_MLP", mlp)):
+            if anchor is None:
+                continue
+            stp = anchor * step_pct / 100.0
+            row["anchored"][aname] = {
+                "step": round(stp, 5),
+                **{f"KTR+{n}": round(anchor + n * stp, 2) for n in (1, 2, 3)},
+                **{f"KTR-{n}": round(anchor - n * stp, 2) for n in (1, 2, 3)},
+            }
+        out["variants"][bname] = row
+
+    return out
+
+
 def supertrend(df: pd.DataFrame, factor: float = 2.0, period: int = 10) -> pd.Series:
     """Faithful port of Pine's ta.supertrend.
 
