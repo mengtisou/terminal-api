@@ -14,6 +14,7 @@ Providers, easiest first:
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import logging
 import os
 from pathlib import Path
@@ -322,14 +323,21 @@ class OandaProvider:
             log.debug("oanda live price failed: %s", e)
             return None
 
-    def fetch(self, symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    def fetch(self, symbol: str, timeframe: str, limit: int,
+              end: str | None = None) -> pd.DataFrame:
         instrument = self.SYMBOLS.get(symbol.upper(), symbol)
         # Strip /v3 suffix if the user included it in OANDA_BASE already.
         base = OANDA_BASE.rstrip("/").removesuffix("/v3")
+        params = {"granularity": self.GRAN[timeframe], "count": limit, "price": "M"}
+        if end:
+            # `to` plus `count` walks backwards from that instant, which is what
+            # scrolling into history needs. OANDA rejects to+from together, so
+            # only ever send one of them.
+            params["to"] = end
         r = httpx.get(
             f"{base}/v3/instruments/{instrument}/candles",
             headers={"Authorization": f"Bearer {OANDA_TOKEN}"},
-            params={"granularity": self.GRAN[timeframe], "count": limit, "price": "M"},
+            params=params,
             timeout=15,
         )
         r.raise_for_status()
@@ -559,6 +567,49 @@ def get_candles(
     df = PROVIDERS["synthetic"].fetch(symbol, timeframe, limit)
     cache.put(symbol, timeframe, df, "synthetic")
     return df, "synthetic"
+
+
+def get_history(symbol: str, timeframe: str, limit: int,
+                end: str) -> tuple[pd.DataFrame, str]:
+    """Candles ending at `end` (ISO-8601), for scrolling back or jumping to a date.
+
+    Deliberately NOT cached: the cache is keyed on (symbol, timeframe) and
+    holds the live window, so writing a historical window into it would make
+    the chart jump backwards on the next poll. Historical bars never change,
+    so the browser can cache them instead.
+
+    Only providers whose fetch() accepts `end` can serve this. OANDA can; the
+    fallbacks cannot, and saying so is better than silently returning the
+    latest bars and pretending they are from the requested date.
+    """
+    if timeframe not in TF_MINUTES:
+        raise ValueError(f"unsupported timeframe: {timeframe}")
+
+    errors = []
+    for name in chain_for(symbol):
+        if not _configured(name):
+            continue
+        provider = PROVIDERS[name]
+        if "end" not in inspect.signature(provider.fetch).parameters:
+            errors.append(f"{name}: no historical support")
+            continue
+        if timeframe not in NATIVE_TF.get(name, set()):
+            errors.append(f"{name}: {timeframe} not native")
+            continue
+        try:
+            df = provider.fetch(symbol, timeframe, limit, end=end)
+            if df.empty:
+                raise DataUnavailable("empty frame")
+            log.info("%s %s history to %s served by %s (%d candles)",
+                     symbol, timeframe, end, name, len(df))
+            return df, name
+        except Exception as e:
+            errors.append(f"{name}: {type(e).__name__}: {e}")
+            log.warning("history provider %s failed: %s", name, e)
+
+    raise DataUnavailable(
+        f"no provider could serve {symbol} {timeframe} history - "
+        + (" | ".join(errors) or "none configured"))
 
 
 def background_refresh(symbol: str, timeframe: str) -> None:

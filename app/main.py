@@ -448,6 +448,40 @@ def price_tick(symbol: str, timeframe: str = "5m"):
     }
 
 
+@app.get("/candles/{symbol}/history")
+def candles_history(symbol: str, timeframe: str = "15m", limit: int = 300,
+                    end: str = ""):
+    """Older bars ending at `end` (ISO-8601 or YYYY-MM-DD), for scrollback.
+
+    Bars only, no indicators. EMAs and SMC levels are computed over a whole
+    window, so slicing them from a partial history chunk would draw values that
+    disagree with the live chart. The browser prepends these bars; the overlays
+    stay anchored to the live window.
+    """
+    from .market import get_history
+
+    if not end:
+        raise HTTPException(400, "end is required, e.g. end=2026-08-01")
+    # A bare date means the start of that day - what a date picker sends, and
+    # what a person means by "show me the 1st".
+    iso = end if "T" in end else f"{end}T00:00:00Z"
+    try:
+        df, source = get_history(symbol, timeframe, min(limit, 1000), iso)
+    except DataUnavailable as e:
+        raise HTTPException(503, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    bars = [{
+        "time": int(ts.timestamp()),
+        "open": round(float(r.open), 5), "high": round(float(r.high), 5),
+        "low": round(float(r.low), 5), "close": round(float(r.close), 5),
+    } for ts, r in df.iterrows()]
+
+    return {"symbol": symbol, "timeframe": timeframe, "source": source,
+            "end": iso, "count": len(bars), "candles": bars}
+
+
 @app.get("/candles/{symbol}")
 def candles(symbol: str, timeframe: str = "15m", limit: int = 300,
             indicators: str = "ema", candle_mode: str = "off"):

@@ -306,6 +306,10 @@
   <div class="tfpop" id="tfPop"></div>
   <button id="auto" class="on">Auto ⏵</button>
   <button id="reload">Refresh</button>
+  <input type="date" id="histDate" title="Jump to a past date"
+         style="font-size:11.5px;padding:5px 6px;background:var(--panel);
+                color:var(--text);border:1px solid var(--line);border-radius:6px">
+  <button id="noteBtn" title="Tap to arm, then tap a price on the chart">✎ Note</button>
   <button id="indBtn" title="Indicators">Indicators</button>
   <button id="cog" title="AI provider settings">⚙</button>
 </header>
@@ -384,6 +388,20 @@
       <div id="chart"></div>
       <canvas id="zoneCanvas" style="position:absolute;inset:0;pointer-events:none;z-index:2"></canvas>
       <div id="legend"></div>
+      <!-- Shown while scrollback is fetching the previous chunk of candles. -->
+      <div id="histFlag" style="display:none;position:absolute;top:8px;left:50%;
+           transform:translateX(-50%);z-index:6;font-size:10.5px;color:var(--muted);
+           background:rgba(13,17,23,.9);border:1px solid var(--line);
+           border-radius:10px;padding:3px 9px">loading history…</div>
+      <!-- Shown while a past date is pinned. Live polling is paused here, so
+           the banner has to be unmissable or the chart looks frozen. -->
+      <div id="histBanner" style="display:none;position:absolute;top:8px;left:8px;right:8px;
+           z-index:7;align-items:center;gap:8px;font-size:11px;color:var(--text);
+           background:rgba(227,160,8,.16);border:1px solid var(--warn);
+           border-radius:8px;padding:6px 9px">
+        <span style="flex:1"></span>
+        <button id="histLive" style="font-size:11px;padding:4px 9px">Back to live</button>
+      </div>
       <div id="evt"></div>
       <div class="panel" id="dashPanel"></div>
       <div class="panel" id="btcPanel"></div>
@@ -757,8 +775,34 @@ function initChart(){
     if(b) drawLegend(b);
   });
 
-  // Repaint zones on any view change - pan, zoom, or resize.
-  chart.timeScale().subscribeVisibleLogicalRangeChange(()=>paintZones());
+  // Note placement. Only active while note mode is armed, so ordinary taps
+  // still pan the chart.
+  chart.subscribeClick(p=>{
+    if(!noteMode || !p.point) return;
+    const existing = noteAt(p.point.y);
+    if(existing){
+      const t = prompt(`Note at ${existing.price} (clear the text to delete)`, existing.text);
+      if(t === null) return;
+      if(!t.trim()) notes = notes.filter(n => n !== existing);
+      else existing.text = t.trim().slice(0, 40);
+    }else{
+      const price = candles.coordinateToPrice(p.point.y);
+      if(price == null) return;
+      const t = prompt(`Note at ${price.toFixed(2)}`, "");
+      if(t === null) return;
+      notes.push({price: +price.toFixed(2), text: (t.trim() || "note").slice(0, 40)});
+    }
+    saveNotes(); drawNotes();
+    noteMode = false; updateNoteBtn();
+  });
+
+  // Repaint zones on any view change - pan, zoom, or resize. Also the hook
+  // for scrollback: once the left edge of the view is within a few bars of
+  // the oldest candle we hold, go and fetch the previous chunk.
+  chart.timeScale().subscribeVisibleLogicalRangeChange(r=>{
+    paintZones();
+    if(r && r.from < 8 && !historyMode) loadOlder();
+  });
   chart.subscribeCrosshairMove(()=>{});
   new ResizeObserver(()=>paintZones()).observe(document.getElementById("chartCol"));
 }
@@ -798,6 +842,23 @@ function addLine(price,color,title,style=LWC.LineStyle.Dashed,width=1){
 }
 
 let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
+
+// --- history / scrollback ---------------------------------------------------
+// loadChart() calls setData() with the live window on every poll, so anything
+// we prepend has to be re-merged each time or it is wiped a second later.
+// historyBars holds the older candles we have fetched, oldest first.
+let historyBars = [];
+let oldestKnown = null;      // unix seconds of the earliest bar on the chart
+let historyLoading = false;
+let historyExhausted = false;  // provider returned nothing older; stop asking
+let historyMode = false;       // viewing a past date; live polling paused
+
+function mergeBars(older, live){
+  // Live wins on overlap - it carries the tick-corrected forming candle.
+  const seen = new Set(live.map(b => b.time));
+  return older.filter(b => !seen.has(b.time)).concat(live);
+}
+
 let lastHeavy = 0;
 let hasLiveTick = false;   // true once a real tick feed is confirmed
 let lastBar = null;        // the forming candle, updated by the tick feed
@@ -843,6 +904,136 @@ async function loadPrice(){
   }catch{}
 }
 
+// Fetch the next chunk of older candles and prepend them. Called when the
+// user scrolls near the left edge - this is what makes the chart feel like
+// TradingView instead of stopping dead at 300 bars.
+async function loadOlder(){
+  if(historyLoading || historyExhausted || firstLoad || !oldestKnown) return;
+  historyLoading = true;
+  const flag = document.getElementById("histFlag");
+  if(flag){ flag.style.display = "block"; flag.textContent = "loading history…"; }
+  try{
+    const end = new Date(oldestKnown * 1000).toISOString();
+    const r = await fetch(`${API}/candles/${symbol}/history`
+                          + `?timeframe=${timeframe}&limit=300&end=${encodeURIComponent(end)}`);
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+
+    // Anything at or after what we already have is not progress. Without this
+    // guard a provider that clamps the window would loop forever.
+    const fresh = (d.candles || [])
+      .map(b => ({...b, time: shift(b.time)}))
+      .filter(b => b.time < oldestKnown);
+    if(!fresh.length){
+      historyExhausted = true;
+      if(flag){ flag.textContent = "no earlier data"; setTimeout(()=>flag.style.display="none", 1500); }
+      return;
+    }
+
+    // Prepending shifts every logical index right by fresh.length, so the
+    // saved range has to shift with it or the view jumps.
+    const before = chart.timeScale().getVisibleLogicalRange();
+    historyBars = mergeBars(fresh, historyBars);
+    await loadChart();
+    if(before) chart.timeScale().setVisibleLogicalRange(
+      {from: before.from + fresh.length, to: before.to + fresh.length});
+    if(flag) flag.style.display = "none";
+  }catch(e){
+    if(flag){ flag.textContent = "history unavailable"; setTimeout(()=>flag.style.display="none", 2000); }
+    // Do not set historyExhausted on a network blip - let the next scroll retry.
+  }finally{
+    historyLoading = false;
+  }
+}
+
+// Jump to a past date. This REPLACES the chart with that window rather than
+// stitching it onto the live data: picking a date three months back would
+// otherwise leave a silent gap between the old bars and today's, which reads
+// as real price action and is not. Polling pauses until you go back to live.
+async function jumpToDate(dateStr){
+  if(!dateStr) return;
+  const banner = document.getElementById("histBanner");
+  try{
+    // End the window one day AFTER the chosen date so that day is fully shown.
+    const end = new Date(dateStr + "T00:00:00Z");
+    end.setUTCDate(end.getUTCDate() + 1);
+    const r = await fetch(`${API}/candles/${symbol}/history`
+                          + `?timeframe=${timeframe}&limit=400&end=${encodeURIComponent(end.toISOString())}`);
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    if(!d.candles || !d.candles.length){
+      if(banner){ banner.style.display="flex";
+        banner.querySelector("span").textContent = "No data for " + dateStr; }
+      return;
+    }
+    historyMode = true;
+    clearTimeout(pollTimer);            // stop live polling
+    stopNewsAuto();
+    const bars = d.candles.map(b => ({...b, time: shift(b.time)}));
+    candles.setData(bars);
+    clearIndicators(); clearSMC(); clearLines();
+    chart.timeScale().fitContent();
+    lastBar = bars.at(-1);
+    drawLegend(lastBar);
+    if(banner){
+      banner.style.display = "flex";
+      banner.querySelector("span").textContent =
+        `History: ${dateStr} · ${bars.length} bars · indicators off`;
+    }
+  }catch(e){
+    if(banner){ banner.style.display="flex";
+      banner.querySelector("span").textContent = "Could not load " + dateStr; }
+  }
+}
+
+function backToLive(){
+  historyMode = false;
+  historyBars = []; historyExhausted = false; oldestKnown = null;
+  const banner = document.getElementById("histBanner");
+  if(banner) banner.style.display = "none";
+  firstLoad = true;                     // refit to the live window
+  loadChart(); schedule(); startNewsAuto();
+}
+
+// --- chart notes -------------------------------------------------------------
+// Horizontal annotated lines you place by tapping a price. Stored per symbol in
+// localStorage, so they survive a reload and a redeploy. Not TradingView's full
+// drawing suite - see the note in the toolbar handler about trendlines.
+let notes = [], noteLines = [], noteMode = false;
+
+function notesKey(){ return `notes:${symbol}`; }
+function loadNotes(){
+  try{ notes = JSON.parse(localStorage.getItem(notesKey()) || "[]"); }
+  catch{ notes = []; }
+}
+function saveNotes(){
+  try{ localStorage.setItem(notesKey(), JSON.stringify(notes)); }catch{}
+}
+function drawNotes(){
+  noteLines.forEach(l=>{ try{ candles.removePriceLine(l); }catch{} });
+  noteLines = notes.map(n => candles.createPriceLine({
+    price: n.price, color: "#c792ea", lineWidth: 1,
+    lineStyle: LWC.LineStyle.Dotted, axisLabelVisible: true,
+    title: n.text || "note",
+  }));
+}
+function updateNoteBtn(){
+  const b = document.getElementById("noteBtn");
+  if(!b) return;
+  b.textContent = noteMode ? "Tap a price…" : `✎ Note${notes.length ? " "+notes.length : ""}`;
+  b.style.borderColor = noteMode ? "var(--accent)" : "";
+  b.style.color = noteMode ? "var(--accent)" : "";
+}
+
+// Tapping within ~10px of an existing note edits it; clearing the text deletes.
+function noteAt(y){
+  for(const n of notes){
+    const c = candles.priceToCoordinate(n.price);
+    if(c != null && Math.abs(c - y) < 10) return n;
+  }
+  return null;
+}
+
 async function loadChart(){
   let d;
   try{
@@ -876,7 +1067,9 @@ async function loadChart(){
     }
   }
 
-  candles.setData(sb);
+  const merged = historyBars.length ? mergeBars(historyBars, sb) : sb;
+  oldestKnown = merged.length ? merged[0].time : null;
+  candles.setData(merged);
   // With per-bar colours the series defaults must not override them.
   candles.applyOptions(candleMode === "off"
     ? {upColor:"#26a69a", downColor:"#ef5350", borderVisible:false,
@@ -976,7 +1169,8 @@ let pricePollTimer = null;
 
 function schedule(){
   clearTimeout(pollTimer);
-  if(!autoOn) return;
+  // A live reload would overwrite the historical window the user asked for.
+  if(!autoOn || historyMode) return;
   const hidden = document.hidden;
   // With a live tick feed the chart already moves every second, so the full
   // reload (300 candles + indicators, 2-4s of work) can run far less often.
@@ -990,7 +1184,7 @@ function schedule(){
 // Full candle reload happens on the slower schedule above.
 function schedulePrice(){
   clearTimeout(pricePollTimer);
-  if(!autoOn || !marketOpen) return;
+  if(!autoOn || !marketOpen || historyMode) return;
   pricePollTimer = setTimeout(async ()=>{
     await loadPrice();
     schedulePrice();
@@ -998,6 +1192,7 @@ function schedulePrice(){
 }
 
 document.addEventListener("visibilitychange", ()=>{
+  if(historyMode) return;
   if(!document.hidden && autoOn){ loadChart(); schedulePrice(); }
   schedule();
 });
@@ -2162,7 +2357,13 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
 document.querySelectorAll("[data-preset]:not([data-preset-view])")
   .forEach(b=>b.onclick=()=>preset(b.dataset.preset));
 document.getElementById("gen").onclick = generate;
+const _noteBtn = document.getElementById("noteBtn");
+if(_noteBtn) _noteBtn.onclick = ()=>{ noteMode = !noteMode; updateNoteBtn(); };
 document.getElementById("reload").onclick = ()=>{ loadChart(); schedule(); };
+const _histDate = document.getElementById("histDate");
+if(_histDate) _histDate.onchange = ()=> jumpToDate(_histDate.value);
+const _histLive = document.getElementById("histLive");
+if(_histLive) _histLive.onclick = ()=>{ if(_histDate) _histDate.value = ""; backToLive(); };
 
 document.getElementById("auto").onclick = e=>{
   autoOn = !autoOn;
@@ -2174,6 +2375,10 @@ document.getElementById("auto").onclick = e=>{
 document.getElementById("symSel").onchange = e=>{
   symbol = e.target.value; firstLoad = true; lastClose = null;
   lastHeavy = 0; drawnKey = null;
+  // Backfilled bars and notes belong to the previous instrument. Carrying
+  // either across would draw one symbol's prices onto another's chart.
+  historyBars = []; oldestKnown = null; historyExhausted = false;
+  loadNotes(); drawNotes(); updateNoteBtn();
   loadChart(); schedule();
   if(document.getElementById("p-news").classList.contains("on")) loadNews();
 };
@@ -2198,6 +2403,7 @@ document.getElementById("tzTag").textContent = tzLabel();
 (async () => {
   initChart();
   initSheet();
+  loadNotes(); updateNoteBtn();
   loadTimeframes();
   loadIndicatorCatalog();
 
@@ -2205,6 +2411,7 @@ document.getElementById("tzTag").textContent = tzLabel();
   if(!ok) return;   // backend unreachable - overlay stays, nothing else starts
 
   await loadChart();
+  drawNotes();          // needs a rendered series before price lines attach
   schedule();
   schedulePrice();
   loadProviders();
