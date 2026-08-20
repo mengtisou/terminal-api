@@ -53,11 +53,24 @@ SYMBOL_BUCKET = {
 # Investing.com's per-category feeds are the most reliable free source that is
 # actually about macro and metals rather than single-company business news.
 FEEDS = [
-    ("Investing Forex", "https://www.investing.com/rss/news_1.rss"),
+    # Order matters: dedup keeps whichever copy arrives first, so the fastest
+    # publisher of a story sets its timestamp. investingLive (formerly
+    # ForexLive) is a trader desk - it posts the primary headline as it breaks,
+    # where Investing.com posts a written-up article about it minutes later.
+    # Same story, different latency. These also skew macro/geopolitical, which
+    # is what actually moves gold and oil.
+    ("investingLive News", "https://investinglive.com/feed/news/"),
+    ("investingLive Central Banks", "https://investinglive.com/feed/centralbank/"),
+    ("investingLive Commodities", "https://investinglive.com/feed/"),
+    ("investingLive Crypto", "https://investinglive.com/feed/cryptocurrency/"),
+    ("FXStreet", "https://www.fxstreet.com/rss/news"),
+    # Slower, but broad - kept as backfill. If the panel feels noisy, these are
+    # the ones to drop first; the four above cover the same ground faster.
+    ("Investing Breaking", "https://www.investing.com/rss/news_285.rss"),
     ("Investing Commodities", "https://www.investing.com/rss/commodities.rss"),
+    ("Investing Forex", "https://www.investing.com/rss/news_1.rss"),
     ("Investing Economy", "https://www.investing.com/rss/news_14.rss"),
     ("Investing Economic Indicators", "https://www.investing.com/rss/news_95.rss"),
-    ("Investing Breaking", "https://www.investing.com/rss/news_285.rss"),
     ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
 ]
 

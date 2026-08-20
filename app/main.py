@@ -805,6 +805,68 @@ def news_live(symbol: str = "XAUUSD", limit: int = 30, ai_tag: int = 40):
     return fetch_live(symbol, limit, ai_tag=ai_tag)
 
 
+@app.get("/news/tag-test")
+def news_tag_test():
+    """Is AI news tagging actually working? Open this in a browser.
+
+    Runs one real batch call against two canned headlines and reports a plain
+    verdict, so diagnosing this does not require SSH access to read a log.
+    """
+    import time as _t
+    from .news import _tag_batch, rule_score
+    from .llm import active
+
+    chain = active("cheap")
+    if not chain:
+        return {"working": False,
+                "verdict": "No AI provider configured for cheap tasks.",
+                "fix": "Set CHEAP_CHAIN=gemini and GEMINI_API_KEY in .env, then restart."}
+
+    probes = [
+        {"title": "Fed holds rates steady, signals cuts may come sooner than expected",
+         "summary": "The Federal Reserve left rates unchanged and softened its guidance."},
+        {"title": "Oil surges as Strait of Hormuz shipping halted after attack",
+         "summary": "Crude jumped on renewed supply disruption fears in the Gulf."},
+    ]
+    for p in probes:
+        p.update(rule_score(p["title"], p["summary"]))
+        p["tagged"] = False
+
+    started = _t.monotonic()
+    try:
+        n = _tag_batch(probes)
+        elapsed = round(_t.monotonic() - started, 1)
+    except Exception as e:
+        return {"working": False, "provider_chain": [c[0] for c in chain],
+                "verdict": f"The tagging call raised {type(e).__name__}.",
+                "error": str(e)[:400],
+                "fix": "Usually a bad or out-of-quota API key. Check GEMINI_API_KEY."}
+
+    if not n:
+        return {"working": False, "provider_chain": [c[0] for c in chain],
+                "seconds": elapsed,
+                "verdict": "The call completed but tagged nothing - the model "
+                           "returned no usable entries.",
+                "fix": "Most often daily free-tier quota is exhausted. Try again "
+                       "tomorrow, or set CHEAP_CHAIN to another provider."}
+
+    return {
+        "working": True,
+        "provider_chain": [c[0] for c in chain],
+        "seconds": elapsed,
+        "tagged": f"{n}/{len(probes)}",
+        "verdict": "AI tagging is working. Headlines in the News panel should "
+                   "show real sentiment and a lightning-bolt takeaway.",
+        "sample": [
+            {"title": p["title"][:60], "impact": p["impact"],
+             "gold": (p.get("assets") or {}).get("gold"),
+             "takeaway": p.get("takeaway", ""),
+             "scored_by": p.get("scored_by")}
+            for p in probes
+        ],
+    }
+
+
 @app.get("/news/dates")
 def news_dates(per_feed: int = 3):
     """Raw publish date from each feed, next to what we parsed it as.
