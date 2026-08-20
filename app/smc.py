@@ -23,10 +23,38 @@ that is the point. Drawing it on a chart is secondary.
 """
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import pandas as pd
 
 from .features import atr, ema
+
+
+# KTR convention. Both of these were wrong relative to the Pine original:
+#
+#   anchor   - Pine measures the +-n steps from MLP; this port measured them
+#              from OP, which shifted every rung by the OP/MLP gap.
+#   boundary - "today" was 00:00 UTC. Spot metals roll at 17:00 New York
+#              (21:00 UTC on EDT), so both OP and MLP resolved to the wrong
+#              candles, and under a midnight-UTC day in a 24h market MLP
+#              collapsed onto OP - which is why they printed 0.05 apart.
+#
+# Defaults reproduce TradingView. Override in .env if your Pine differs:
+#   KTR_ANCHOR=op|mlp          KTR_DAY_BOUNDARY_UTC_HOUR=0|21|22
+KTR_ANCHOR = os.getenv("KTR_ANCHOR", "mlp").strip().lower()
+KTR_BOUNDARY_HOUR = int(os.getenv("KTR_DAY_BOUNDARY_UTC_HOUR", "21"))
+
+
+def ktr_days(index: pd.DatetimeIndex, hour: int | None = None) -> pd.DatetimeIndex:
+    """Group candles into trading days on the configured rollover hour.
+
+    Shift so the boundary lands on midnight, normalise, and the grouping falls
+    out. Used by both the level maths and the chart, so a level never starts
+    drawing from a different bar than the one it was computed from.
+    """
+    h = KTR_BOUNDARY_HOUR if hour is None else hour
+    return (index + pd.Timedelta(hours=(24 - h) % 24)).normalize()
 
 
 # ---------------------------------------------------------------- pivots
@@ -79,37 +107,44 @@ def ktr(df: pd.DataFrame, step_pct: float = 0.40,
             "side": "n/a",
         }
 
-    days = df.index.normalize()
+    days = ktr_days(df.index)
     op = float(df["open"][days == days[-1]].iloc[0])
     prev = df[days < days[-1]]
     mlp = float(prev["close"].iloc[-1]) if len(prev) else np.nan
 
-    stp = op * step_pct / 100.0
+    # Pine steps from MLP, not OP. Fall back to OP only when there is no prior
+    # day in the window, otherwise the ladder would silently shift.
+    anchor = mlp if (KTR_ANCHOR == "mlp" and mlp == mlp) else op
+    stp = anchor * step_pct / 100.0
     price = float(df["close"].iloc[-1])
 
     levels = {"OP": round(op, 5), "MLP": round(mlp, 5) if mlp == mlp else None}
     for n in (1, 2, 3):
-        levels[f"KTR+{n}"] = round(op + n * stp, 5)
-        levels[f"KTR-{n}"] = round(op - n * stp, 5)
+        levels[f"KTR+{n}"] = round(anchor + n * stp, 5)
+        levels[f"KTR-{n}"] = round(anchor - n * stp, 5)
 
     # Which band price currently sits in - the actionable read.
-    band, above = "OP", price - op
+    band, above = "anchor", price - anchor
     for n in (3, 2, 1):
-        if price >= op + n * stp:
+        if price >= anchor + n * stp:
             band = f"above KTR+{n}"
             break
-        if price <= op - n * stp:
+        if price <= anchor - n * stp:
             band = f"below KTR-{n}"
             break
     else:
-        band = "between OP and KTR+1" if price > op else "between OP and KTR-1"
+        band = "between anchor and KTR+1" if price > anchor else "between anchor and KTR-1"
 
     return {
         "applicable": True,
         "levels": levels,
         "step": round(stp, 5),
         "position": band,
+        "anchor": KTR_ANCHOR,
+        "anchor_price": round(anchor, 5),
+        "day_boundary_utc_hour": KTR_BOUNDARY_HOUR,
         "distance_from_open_pct": round((price - op) / op * 100, 3),
+        "distance_from_anchor_pct": round((price - anchor) / anchor * 100, 3),
         "side": "above open" if above > 0 else "below open",
     }
 

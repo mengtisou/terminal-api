@@ -135,16 +135,17 @@ def ktr_levels(df: pd.DataFrame) -> dict:
 
     Silently empty on daily and above, where a daily-open anchor is meaningless.
     """
-    from .smc import ktr
+    from .smc import ktr, ktr_days
 
     span = (df.index[-1] - df.index[-2]).total_seconds() / 60 if len(df) > 1 else 15
     if span >= 1440:
         return {"OP": _flat(df, None)}
 
     lv = ktr(df)["levels"]
-    # KTR is anchored to today's open, so it should not stretch back over
-    # yesterday's candles.
-    days = df.index.normalize()
+    # KTR is anchored to the trading day, so it should not stretch back over
+    # yesterday's candles. Must use the SAME boundary the levels were computed
+    # on, or the line starts at a different bar than the maths assumed.
+    days = ktr_days(df.index)
     day_start = df.index[days == days[-1]][0].isoformat()
     _f = lambda v: _flat(df, v, day_start)
     return {

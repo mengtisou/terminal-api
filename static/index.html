@@ -782,7 +782,11 @@ function clearLines(){ priceLines.forEach(l=>candles.removePriceLine(l)); priceL
 // rationed, and only on narrow screens. On desktop there is room, so nothing
 // changes there.
 function isNarrow(){ return window.matchMedia("(max-width: 900px)").matches; }
-const CORE_TAGS = /^(OP|MLP|BSL|SSL|ENTRY|SL|TP\d*)$/;
+// KTR is the whole point of this chart, so its rungs keep their tags even on a
+// phone - an unlabelled dashed line tells you nothing. What gets dropped is the
+// second tier (premium/discount/equilibrium, swings, order-block edges), which
+// is what actually buried the price scale.
+const CORE_TAGS = /^(OP|MLP|BSL|SSL|ENTRY|SL|TP\d*|KTR[+-]\d)$/;
 function axisTag(title){
   if(!title) return false;
   return isNarrow() ? CORE_TAGS.test(String(title).trim()) : true;
@@ -1836,17 +1840,16 @@ function drawIndicators(payload){
           // even this list is too many, so it narrows to the four you place
           // orders against. The lines themselves still draw either way.
           const major = /^(OP|MLP|BSL|SSL|KTR[+-][12]|swing_|premium|discount|equilibrium|demand_|supply_)/.test(key);
-          const tag = isNarrow() ? /^(OP|MLP|BSL|SSL)$/.test(key) : major;
+          const tag = isNarrow() ? /^(OP|MLP|BSL|SSL|KTR[+-]\d)$/.test(key) : major;
           opts = {...opts,
                   lineWidth: /^(OP|BSL|SSL|swing_)/.test(key) ? 2 : 1,
                   lineStyle: LWC.LineStyle.Dashed,
                   lastValueVisible: tag,
-                  // Reference levels are annotations, not price data. Letting
-                  // KTR+-2 and friends drive autoscale stretched the axis to
-                  // ~190pts for 60pts of candles, so two thirds of the chart
-                  // was empty - which is what you saw when the sheet covered
-                  // the rest. They still draw; they just do not vote on range.
-                  autoscaleInfoProvider: () => null,
+                  // These MUST stay in autoscale. Excluding them made the axis
+                  // hug the candles, which looked tidy right up until KTR+2,
+                  // +3 and -3 fell outside the visible range and the ladder
+                  // vanished. A level you cannot see is not a cleaner chart.
+                  // The sheet-open case is handled by fitChartToSheet instead.
                   title: tag ? key.replace(/_/g," ") : ""};
         }
         const s = chart.addSeries(LWC.LineSeries, opts);
