@@ -231,7 +231,18 @@
   @media (max-width: 900px){
     body{height:100dvh}
 
-    header{gap:8px;padding:8px 10px 6px;position:relative}
+    /* Every feature added a button, and wrap:wrap turned the header into three
+       stacked rows that ate the chart. One scrolling row instead: the controls
+       you use constantly stay put, the rest are a swipe away. */
+    header{gap:8px;padding:8px 10px 6px;position:relative;
+           flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
+           scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    header::-webkit-scrollbar{display:none}
+    header > *{flex:0 0 auto}
+    header button{white-space:nowrap}
+    /* The date picker is the widest control and the least used - shrink it so
+       it stops pushing everything else off screen. */
+    #histDate{max-width:34px;padding:5px 2px}
     .sym{font-size:15px}
     .price{font-size:17px}
     header .badge{font-size:9.5px;padding:2px 6px}
@@ -2262,14 +2273,19 @@ function measureChart(rect){
   _geom.w = w; _geom.h = h; _geom.dpr = dpr;
   for(const cv of [_geom.cv, _geom.dcv]){
     if(!cv) continue;
-    // Backing store only. Setting style.width/height here would fight the CSS
-    // inset:0 that already stretches the canvas over the chart: if the cached
-    // number were ever stale the canvas would DISPLAY at one size while we
-    // drew assuming another, and every zone would land at the wrong price and
-    // the wrong height. Let CSS own the displayed size; we only own the pixels.
+    // BOTH the backing store and the CSS size must be set. A canvas is a
+    // REPLACED element: with position:absolute and left/right:0 but width:auto,
+    // CSS resolves its width to the INTRINSIC size - the width attribute - not
+    // to the parent box. Leaving style.width unset therefore let the canvas
+    // render at its backing-store size in CSS pixels (e.g. 1140x2100 on a
+    // dpr-3 phone), which blew the page open and painted zones far below the
+    // chart. Staleness is handled by sourcing w/h from the ResizeObserver
+    // instead of a cache that can drift.
     if(cv.width !== w*dpr || cv.height !== h*dpr){
       cv.width = w*dpr; cv.height = h*dpr;
     }
+    cv.style.width = w + "px";
+    cv.style.height = h + "px";
   }
   _geom.ctx  = _geom.cv  ? _geom.cv.getContext("2d")  : null;
   _geom.dctx = _geom.dcv ? _geom.dcv.getContext("2d") : null;
