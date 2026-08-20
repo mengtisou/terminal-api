@@ -871,18 +871,31 @@ function initChart(){
   if(_chartEl){
     for(const ev of ["pointerdown","touchstart","wheel"]){
       _chartEl.addEventListener(ev, ()=>{
-        lastViewChange = performance.now();
+        if(ev !== "wheel") pointerDown = true;
+        // Deliberately NOT touching lastViewChange: a tap that moves nothing
+        // must not blank the labels. The tracking loop below sets it only when
+        // the view actually moves.
         startTracking();
       }, {passive:true});
     }
   }
+  // Released anywhere, not just over the chart - a price-scale drag often ends
+  // with the finger outside it.
+  for(const ev of ["pointerup","pointercancel","touchend","touchcancel"]){
+    window.addEventListener(ev, ()=>{
+      pointerDown = false;
+      startTracking();          // one last frame to settle
+    }, {passive:true});
+  }
   // Re-measure only when the box actually changes size, not every frame.
   if(window.ResizeObserver){
-    new ResizeObserver(()=>{ measureChart(); scheduleOverlays(); })
-      .observe(document.getElementById("chartCol"));
+    new ResizeObserver(entries=>{
+      measureChart(entries[0] && entries[0].contentRect);
+      scheduleOverlays();
+    }).observe(document.getElementById("chartCol"));
   }
-  chart.subscribeCrosshairMove(()=>{});
-  new ResizeObserver(()=>paintZones()).observe(document.getElementById("chartCol"));
+  // A second ResizeObserver on the same element used to live here, so every
+  // resize painted twice. The observer above already covers it.
 }
 
 function drawLegend(b){
@@ -926,6 +939,7 @@ let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
 // we prepend has to be re-merged each time or it is wiped a second later.
 // historyBars holds the older candles we have fetched, oldest first.
 let historyBars = [];
+let liveBars = [];      // last live window, so backfill can merge without refetching
 let oldestKnown = null;      // unix seconds of the earliest bar on the chart
 let historyLoading = false;
 let historyExhausted = false;  // provider returned nothing older; stop asking
@@ -1017,7 +1031,16 @@ async function loadOlder(){
     // saved range has to shift with it or the view jumps.
     const before = chart.timeScale().getVisibleLogicalRange();
     historyBars = mergeBars(fresh, historyBars);
-    await loadChart();
+
+    // Splice the bars in directly. Calling loadChart() here would refetch the
+    // live candles AND, once a minute, the SMC overlay - which is why zones
+    // appeared to reload while scrolling. Backfill is purely additive; nothing
+    // about the live window or the zones has changed.
+    const merged = mergeBars(historyBars, liveBars);
+    barTimes = merged.map(b => b.time);
+    oldestKnown = merged.length ? merged[0].time : oldestKnown;
+    candles.setData(merged);
+
     if(before) chart.timeScale().setVisibleLogicalRange(
       {from: before.from + fresh.length, to: before.to + fresh.length});
     if(flag) flag.style.display = "none";
@@ -1614,6 +1637,7 @@ async function loadChart(){
     }
   }
 
+  liveBars = sb;
   const merged = historyBars.length ? mergeBars(historyBars, sb) : sb;
   oldestKnown = merged.length ? merged[0].time : null;
   // Drawing anchors snap to these. Must include backfilled history, or a shape
@@ -2180,24 +2204,42 @@ try{ zonesOn = localStorage.getItem("zones") !== "0"; }catch{}
 // once on resize instead, and hand the cached numbers to both canvases.
 const _geom = {w: 0, h: 0, dpr: 1, cv: null, dcv: null, col: null, ctx: null, dctx: null};
 
-function measureChart(){
+// Size is supplied by the ResizeObserver's contentRect, which is measured by
+// the browser without forcing a layout flush - so this stays cheap AND cannot
+// go stale. Passing null falls back to a direct read, for the very first call
+// before the observer has fired.
+function measureChart(rect){
   _geom.col = _geom.col || document.getElementById("chartCol");
   _geom.cv  = _geom.cv  || document.getElementById("zoneCanvas");
   _geom.dcv = _geom.dcv || document.getElementById("drawCanvas");
   if(!_geom.col) return;
   const dpr = window.devicePixelRatio || 1;
-  const w = _geom.col.clientWidth, h = _geom.col.clientHeight;
+  const w = Math.round(rect ? rect.width  : _geom.col.clientWidth);
+  const h = Math.round(rect ? rect.height : _geom.col.clientHeight);
   if(!w || !h) return;
   _geom.w = w; _geom.h = h; _geom.dpr = dpr;
   for(const cv of [_geom.cv, _geom.dcv]){
     if(!cv) continue;
+    // Backing store only. Setting style.width/height here would fight the CSS
+    // inset:0 that already stretches the canvas over the chart: if the cached
+    // number were ever stale the canvas would DISPLAY at one size while we
+    // drew assuming another, and every zone would land at the wrong price and
+    // the wrong height. Let CSS own the displayed size; we only own the pixels.
     if(cv.width !== w*dpr || cv.height !== h*dpr){
       cv.width = w*dpr; cv.height = h*dpr;
-      cv.style.width = w+"px"; cv.style.height = h+"px";
     }
   }
   _geom.ctx  = _geom.cv  ? _geom.cv.getContext("2d")  : null;
   _geom.dctx = _geom.dcv ? _geom.dcv.getContext("2d") : null;
+}
+
+// Width of the plotting area, i.e. everything left of the price scale. Zones
+// drawn to _geom.w ran underneath the axis and printed behind the badges.
+function plotWidth(){
+  try{
+    const sw = chart.priceScale("right").width() || 0;
+    return Math.max(0, _geom.w - sw);
+  }catch{ return _geom.w; }
 }
 
 function sizeCanvas(){
@@ -2241,14 +2283,41 @@ function onViewChanged(){
 // frame or more behind the candles, which reads as the zone sitting still and
 // then snapping into place when you let go. The loop stops on its own shortly
 // after the view settles, so it costs nothing at rest.
-let trackRAF = null;
+let trackRAF = null, pointerDown = false;
+
+// THE reason zones did not follow a price zoom: subscribeVisibleLogicalRangeChange
+// only fires when the TIME axis moves. Dragging or pinching the PRICE scale
+// rescales the candles without changing the logical range, so no event was
+// emitted and the overlay never repainted - the boxes sat frozen until
+// something else happened to trigger a paint. Tracking therefore has to run for
+// as long as the finger is down, not just for a while after a range event.
+// A signature of what the view currently shows: where the time axis sits, plus
+// where one reference price lands in pixels (which catches price-scale zoom,
+// since that never changes the logical range).
+let lastSig = "";
+function viewSignature(){
+  try{
+    const r = chart.timeScale().getVisibleLogicalRange();
+    const ref = lastBar ? candles.priceToCoordinate(lastBar.close) : null;
+    return r ? `${r.from.toFixed(2)}|${r.to.toFixed(2)}|${ref == null ? "x" : ref.toFixed(1)}` : "";
+  }catch{ return ""; }
+}
+
 function startTracking(){
   if(trackRAF !== null) return;
   const step = ()=>{
+    // Only a genuine change counts as movement. Without this a stationary
+    // finger on the chart would keep the labels suppressed indefinitely.
+    const sig = viewSignature();
+    if(sig !== lastSig){ lastSig = sig; lastViewChange = performance.now(); }
     paintZonesNow();
     redrawDrawingsNow();
-    // Keep going through kinetic scroll, then stop.
-    if(performance.now() - lastViewChange < 260){
+    // A held-but-motionless finger needs no repaints, and if a pointerup is
+    // ever missed (capture, a dropped touch, switching apps mid-drag) this
+    // stops the loop spinning at 60fps forever - which would look and feel
+    // exactly like the chart continuously reloading itself.
+    const moving = performance.now() - lastViewChange;
+    if((pointerDown && moving < 2000) || moving < 260){
       trackRAF = requestAnimationFrame(step);
     }else{
       trackRAF = null;
@@ -2261,6 +2330,68 @@ function startTracking(){
 
 function paintZones(){ scheduleOverlays(); }
 
+// Turn on with ?zonedebug=1 in the URL. Draws, for each zone, the price it was
+// TOLD to draw at next to the price actually read back from the pixel it landed
+// on. If those two disagree, the coordinate mapping is broken and the readout
+// says by how much - which beats guessing from a screenshot.
+const ZONE_DEBUG = new URLSearchParams(location.search).get("zonedebug") === "1";
+
+// Counts what actually happens, so "it reloads on every click" can be measured
+// instead of inferred. Only installed when the flag is on.
+const _act = {fetches: [], repaints: [], lastUrl: ""};
+if(ZONE_DEBUG){
+  const realFetch = window.fetch.bind(window);
+  window.fetch = (...args) => {
+    const url = String(args[0] || "");
+    _act.fetches.push(performance.now());
+    _act.lastUrl = url.replace(/^https?:\/\/[^/]+/, "");
+    return realFetch(...args);
+  };
+}
+function _recent(list, ms){
+  const now = performance.now();
+  while(list.length && now - list[0] > ms) list.shift();
+  return list.length;
+}
+
+function zoneDebugOverlay(ctx){
+  const cv = _geom.cv;
+  if(!cv) return;
+  const cssW = cv.clientWidth, cssH = cv.clientHeight;   // what CSS renders
+  const mismatch = Math.abs(cssW - _geom.w) > 1 || Math.abs(cssH - _geom.h) > 1;
+
+  ctx.font = "11px monospace";
+  ctx.textBaseline = "top";
+  _act.repaints.push(performance.now());
+  const lines = [
+    `fetches/5s   ${_recent(_act.fetches, 5000)}   last: ${_act.lastUrl.slice(0, 34) || "-"}`,
+    `repaints/1s  ${_recent(_act.repaints, 1000)}`,
+    `canvas css   ${cssW}x${cssH}`,
+    `_geom cached ${_geom.w}x${_geom.h}   ${mismatch ? "MISMATCH" : "ok"}`,
+    `backing      ${cv.width}x${cv.height}  dpr ${_geom.dpr}`,
+    `plotWidth    ${plotWidth().toFixed(0)}`,
+  ];
+  if(overlayData && overlayData.zones){
+    for(const z of overlayData.zones.slice(0, 3)){
+      const yT = candles.priceToCoordinate(z.top);
+      const yB = candles.priceToCoordinate(z.bottom);
+      if(yT == null || yB == null){ lines.push(`zone ${z.top} -> offscreen`); continue; }
+      // Read the price back out of the pixel we are about to paint on.
+      const backT = candles.coordinateToPrice(yT);
+      const backB = candles.coordinateToPrice(yB);
+      const errT = backT == null ? NaN : backT - z.top;
+      lines.push(`zone ${z.top.toFixed(2)}-${z.bottom.toFixed(2)} `
+               + `y ${yT.toFixed(0)}-${yB.toFixed(0)} `
+               + `back ${backT == null ? "?" : backT.toFixed(2)} `
+               + `err ${isNaN(errT) ? "?" : errT.toFixed(3)}`);
+    }
+  }
+  ctx.fillStyle = "rgba(0,0,0,.82)";
+  ctx.fillRect(4, 4, 460, lines.length * 14 + 8);
+  ctx.fillStyle = mismatch ? "#ef5350" : "#26a69a";
+  lines.forEach((t, i) => ctx.fillText(t, 10, 8 + i * 14));
+}
+
 function paintZonesNow(){
   const cv = document.getElementById("zoneCanvas");
   if(!cv) return;
@@ -2268,7 +2399,7 @@ function paintZonesNow(){
   if(!ctx) return;
   ctx.clearRect(0, 0, _geom.w, _geom.h);
   if(!overlayData||!zonesOn) return;
-  const ts = chart.timeScale(), right = _geom.w;
+  const ts = chart.timeScale(), right = plotWidth();
   const skipLabels = isPanning();
   for(const z of overlayData.zones){
     const yTop = candles.priceToCoordinate(z.top);
@@ -2295,6 +2426,7 @@ function paintZonesNow(){
       z.label.split("\n").forEach((line,i)=>ctx.fillText(line,xL+6,y+4+i*12));
     }
   }
+  if(ZONE_DEBUG) zoneDebugOverlay(ctx);
 }
 
 async function loadOverlay(){
