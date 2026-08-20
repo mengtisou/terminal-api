@@ -1214,7 +1214,11 @@ let lastNewsTs = null, newsAutoTimer = null;
 
 async function autoRefreshNews(){
   try{
-    const d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=40`)).json();
+    // ai_tag=0 deliberately: this poll only needs the newest timestamp to
+    // decide whether to show the dot. Letting it tag would run a full model
+    // pass every 60s forever, burning the free daily quota on a check whose
+    // result is usually "nothing new". loadNews() does the tagging, on demand.
+    const d = await (await fetch(`${API}/news/live?symbol=${symbol}&limit=40&ai_tag=0`)).json();
     if(!d.items || !d.items.length) return;
 
     const newest = d.items[0].published_at;
