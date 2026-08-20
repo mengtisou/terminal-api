@@ -321,8 +321,10 @@
   <button id="auto" class="on">Auto ⏵</button>
   <button id="reload">Refresh</button>
   <input type="date" id="histDate" title="Jump to a past date"
-         style="font-size:11.5px;padding:5px 6px;background:var(--panel);
-                color:var(--text);border:1px solid var(--line);border-radius:6px">
+         aria-label="Jump to a past date"
+         style="font-size:11.5px;padding:5px 6px;max-width:132px;flex:0 0 auto;
+                background:var(--panel);color:var(--text);
+                border:1px solid var(--line);border-radius:6px">
   <button id="installBtn" style="display:none" title="Install as an app">⤓ Install</button>
   <button id="bellBtn" title="Enable phone notifications for entry signals">🔔</button>
   <button id="noteBtn" title="Tap to arm, then tap a price on the chart">✎ Note</button>
@@ -424,7 +426,7 @@
       <div id="evt"></div>
       <!-- Drawing tools. Collapsed to a single button by default so the chart
            stays clean; tap ✎ to expand the strip. -->
-      <div id="drawBar" style="position:absolute;top:52px;left:6px;z-index:6;
+      <div id="drawBar" style="position:absolute;top:96px;left:6px;z-index:6;
            display:flex;flex-direction:column;gap:3px">
         <button id="drawToggle" title="Drawing tools">✎</button>
         <div id="drawTools" style="display:none;flex-direction:column;gap:3px">
@@ -846,10 +848,14 @@ function initChart(){
   // for scrollback: once the left edge of the view is within a few bars of
   // the oldest candle we hold, go and fetch the previous chunk.
   chart.timeScale().subscribeVisibleLogicalRangeChange(r=>{
-    paintZones();
-    redrawDrawings();
+    onViewChanged();
     if(r && r.from < 8 && !historyMode) loadOlder();
   });
+  // Re-measure only when the box actually changes size, not every frame.
+  if(window.ResizeObserver){
+    new ResizeObserver(()=>{ measureChart(); scheduleOverlays(); })
+      .observe(document.getElementById("chartCol"));
+  }
   chart.subscribeCrosshairMove(()=>{});
   new ResizeObserver(()=>paintZones()).observe(document.getElementById("chartCol"));
 }
@@ -1227,16 +1233,10 @@ function snapTime(t){
 }
 
 function sizeDrawCanvas(){
-  const cv = document.getElementById("drawCanvas");
-  const col = document.getElementById("chartCol");
-  if(!cv || !col) return null;
-  const dpr = window.devicePixelRatio||1, w = col.clientWidth, h = col.clientHeight;
-  if(cv.width !== w*dpr || cv.height !== h*dpr){
-    cv.width=w*dpr; cv.height=h*dpr; cv.style.width=w+"px"; cv.style.height=h+"px";
-  }
-  const ctx = cv.getContext("2d");
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  return ctx;
+  if(!_geom.dctx) measureChart();
+  if(!_geom.dctx) return null;
+  _geom.dctx.setTransform(_geom.dpr,0,0,_geom.dpr,0,0);
+  return _geom.dctx;
 }
 
 function anchorXY(pt){
@@ -1318,18 +1318,12 @@ function drawShape(ctx, d, W, H, isSel){
   ctx.setLineDash([]);
 }
 
-let drawQueued = false;
-function redrawDrawings(){
-  if(drawQueued) return;
-  drawQueued = true;
-  requestAnimationFrame(()=>{ drawQueued=false; redrawDrawingsNow(); });
-}
+function redrawDrawings(){ scheduleOverlays(); }
 
 function redrawDrawingsNow(){
   const ctx = sizeDrawCanvas();
-  const cv = document.getElementById("drawCanvas");
-  if(!ctx||!cv) return;
-  const W = cv.clientWidth, H = cv.clientHeight;
+  if(!ctx) return;
+  const W = _geom.w, H = _geom.h;
   ctx.clearRect(0,0,W,H);
   drawings.forEach((d,i)=> drawShape(ctx, d, W, H, i === selected));
   if(drawPending && drawPending.points[1]) drawShape(ctx, drawPending, W, H, false);
@@ -1413,8 +1407,9 @@ function positionSelPanel(){
   if(!p || !d || p.style.display === "none") return;
   const g = shapeGeom(d);
   if(!g){ p.style.display = "none"; return; }
-  const col = document.getElementById("chartCol");
-  const W = col ? col.clientWidth : 300;
+  // Cached width: this runs inside the paint frame, so a clientWidth read here
+  // would reintroduce the layout flush the caching was meant to remove.
+  const W = _geom.w || 300;
   const x = Math.max(4, Math.min(W - 150, (g.a.x + (g.b ? g.b.x : g.a.x)) / 2 - 70));
   const y = Math.max(4, (g.a.y + (g.b ? g.b.y : g.a.y)) / 2 - 44);
   p.style.left = x + "px";
@@ -2140,34 +2135,80 @@ async function pullNews(){
 let overlayData = null, zonesOn = true, markerApi = null;
 try{ zonesOn = localStorage.getItem("zones") !== "0"; }catch{}
 
-function sizeCanvas(){
-  const cv = document.getElementById("zoneCanvas");
-  const col = document.getElementById("chartCol");
-  if(!cv||!col) return null;
-  const dpr = window.devicePixelRatio||1, w = col.clientWidth, h = col.clientHeight;
-  if(cv.width !== w*dpr || cv.height !== h*dpr){
-    cv.width=w*dpr; cv.height=h*dpr; cv.style.width=w+"px"; cv.style.height=h+"px";
+// Cached chart geometry. Reading clientWidth/clientHeight inside a rAF forces
+// the browser to flush layout, and the old code did it four times per frame
+// while panning (twice per canvas, plus the clearRect args). That synchronous
+// reflow is what made scrolling feel half-rate next to TradingView. Measure
+// once on resize instead, and hand the cached numbers to both canvases.
+const _geom = {w: 0, h: 0, dpr: 1, cv: null, dcv: null, col: null, ctx: null, dctx: null};
+
+function measureChart(){
+  _geom.col = _geom.col || document.getElementById("chartCol");
+  _geom.cv  = _geom.cv  || document.getElementById("zoneCanvas");
+  _geom.dcv = _geom.dcv || document.getElementById("drawCanvas");
+  if(!_geom.col) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = _geom.col.clientWidth, h = _geom.col.clientHeight;
+  if(!w || !h) return;
+  _geom.w = w; _geom.h = h; _geom.dpr = dpr;
+  for(const cv of [_geom.cv, _geom.dcv]){
+    if(!cv) continue;
+    if(cv.width !== w*dpr || cv.height !== h*dpr){
+      cv.width = w*dpr; cv.height = h*dpr;
+      cv.style.width = w+"px"; cv.style.height = h+"px";
+    }
   }
-  const ctx = cv.getContext("2d");
-  ctx.setTransform(dpr,0,0,dpr,0,0);
-  return ctx;
+  _geom.ctx  = _geom.cv  ? _geom.cv.getContext("2d")  : null;
+  _geom.dctx = _geom.dcv ? _geom.dcv.getContext("2d") : null;
 }
 
+function sizeCanvas(){
+  if(!_geom.ctx) measureChart();
+  if(!_geom.ctx) return null;
+  _geom.ctx.setTransform(_geom.dpr,0,0,_geom.dpr,0,0);
+  return _geom.ctx;
+}
+
+// Both overlays share one animation frame. Two independent rAF callbacks meant
+// two clears and two coordinate passes per frame, competing for the same 16ms.
 let paintQueued = false;
-function paintZones(){
+let lastViewChange = 0, settleTimer = null;
+
+// True while the user is actively dragging or pinching. Label text is the most
+// expensive part of a repaint, so it is skipped mid-gesture and drawn once the
+// view settles - the boxes still track your finger exactly, the writing just
+// arrives a moment later.
+function isPanning(){ return performance.now() - lastViewChange < 120; }
+
+function scheduleOverlays(){
   if(paintQueued) return;
   paintQueued = true;
-  requestAnimationFrame(()=>{ paintQueued=false; paintZonesNow(); });
+  requestAnimationFrame(()=>{
+    paintQueued = false;
+    paintZonesNow();
+    redrawDrawingsNow();
+  });
 }
+
+function onViewChanged(){
+  lastViewChange = performance.now();
+  scheduleOverlays();
+  // Repaint once more after the gesture stops, to put the labels back.
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(scheduleOverlays, 150);
+}
+
+function paintZones(){ scheduleOverlays(); }
 
 function paintZonesNow(){
   const cv = document.getElementById("zoneCanvas");
   if(!cv) return;
   const ctx = sizeCanvas();
   if(!ctx) return;
-  ctx.clearRect(0,0,cv.clientWidth,cv.clientHeight);
+  ctx.clearRect(0, 0, _geom.w, _geom.h);
   if(!overlayData||!zonesOn) return;
-  const ts = chart.timeScale(), right = cv.clientWidth;
+  const ts = chart.timeScale(), right = _geom.w;
+  const skipLabels = isPanning();
   for(const z of overlayData.zones){
     const yTop = candles.priceToCoordinate(z.top);
     const yBot = candles.priceToCoordinate(z.bottom);
@@ -2186,7 +2227,7 @@ function paintZonesNow(){
     ctx.setLineDash(z.dashed?[4,3]:[]);
     ctx.strokeRect(xL+.5,y+.5,right-xL-1,Math.max(h2-1,1));
     ctx.setLineDash([]);
-    if(z.label&&h2>16&&right-xL>90){
+    if(z.label && !skipLabels && h2>16 && right-xL>90){
       ctx.fillStyle=`rgba(${z.color},0.95)`;
       ctx.font="10px -apple-system,Segoe UI,sans-serif";
       ctx.textBaseline="top";
@@ -2523,8 +2564,45 @@ function makeSubPane(key, label, height){
   return c;
 }
 
+// Axis badges collide when levels cluster. Lightweight Charts responds by
+// shoving them apart, which separates a tag from its own value - on 15m,
+// BSL/MLP/OP sit 7px apart and the scale becomes unreadable. So decide the tag
+// set up front: walk levels in priority order and keep one only if it clears
+// everything already kept. The lines all still draw; only the badge is rationed.
+const TAG_PRIORITY = ["OP","MLP","BSL","SSL","KTR+1","KTR-1",
+                      "KTR+2","KTR-2","KTR+3","KTR-3"];
+
+function pickAxisTags(payload){
+  const rows = [];
+  for(const spec of Object.values(payload)){
+    if(!spec || spec.style !== "level" || !spec.series) continue;
+    for(const [key, pts] of Object.entries(spec.series)){
+      const last = pts && pts.length ? pts[pts.length - 1] : null;
+      if(last && last.value != null) rows.push({key, price: last.value});
+    }
+  }
+  const rank = k => { const i = TAG_PRIORITY.indexOf(k); return i < 0 ? 99 : i; };
+  rows.sort((a, b) => rank(a.key) - rank(b.key));
+
+  const narrow = isNarrow();
+  const minGap = narrow ? 26 : 18;      // px a badge needs to stay legible
+  const keep = new Set(), taken = [];
+  for(const r of rows){
+    // Second-tier levels (premium/discount/swings/zone edges) never get a
+    // badge on a phone - they are the ones that buried the price scale.
+    if(narrow && rank(r.key) === 99) continue;
+    const y = candles.priceToCoordinate(r.price);
+    if(y == null) continue;
+    if(taken.some(t => Math.abs(t - y) < minGap)) continue;
+    keep.add(r.key);
+    taken.push(y);
+  }
+  return keep;
+}
+
 function drawIndicators(payload){
   if(!payload){ clearIndicators(); return; }
+  const axisTagSet = pickAxisTags(payload);
 
   const key = structureKey(payload);
   if(key === drawnKey){
@@ -2554,13 +2632,9 @@ function drawIndicators(payload){
         if(spec.style === "dots")
           opts = {...opts, lineWidth:1, lineStyle:LWC.LineStyle.Dotted};
         if(spec.style === "level"){
-          // Horizontal references, not curves. Only the levels you actually
-          // trade off get an axis tag - tagging all 25 makes the axis
-          // unreadable, which defeats the point of showing them. On a phone
-          // even this list is too many, so it narrows to the four you place
-          // orders against. The lines themselves still draw either way.
-          const major = /^(OP|MLP|BSL|SSL|KTR[+-][12]|swing_|premium|discount|equilibrium|demand_|supply_)/.test(key);
-          const tag = isNarrow() ? /^(OP|MLP|BSL|SSL|KTR[+-]\d)$/.test(key) : major;
+          // Which levels earn an axis badge is decided by pickAxisTags(), which
+          // checks actual pixel spacing rather than guessing from names.
+          const tag = axisTagSet.has(key);
           opts = {...opts,
                   lineWidth: /^(OP|BSL|SSL|swing_)/.test(key) ? 2 : 1,
                   lineStyle: LWC.LineStyle.Dashed,
