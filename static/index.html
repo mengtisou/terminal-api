@@ -12,6 +12,13 @@
     --text:#e6edf3; --muted:#8b98a8; --dim:#5a6472;
     --up:#26a69a; --down:#ef5350;
     --accent:#4a9eff; --warn:#e3a008; --danger:#f85149;
+    /* Height of the collapsed sheet strip on mobile - the bottom nav bar.
+       Two rules depend on it (how far the sheet is pushed down, and how much
+       room the chart leaves for it). Keeping it in one place stops them
+       drifting apart and re-hiding the time axis. 56px is what the tab bar
+       actually measures: 14 padding + 26 tab padding + 15 line + 1 border. */
+    --peek:56px;
+    --peek-safe:calc(var(--peek) + env(safe-area-inset-bottom, 0px));
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
@@ -110,7 +117,7 @@
   /* Stay reachable however far the conversation scrolls. */
   .presets{display:grid;grid-template-columns:1fr 1fr;gap:7px;
            position:sticky;top:0;z-index:15;background:var(--panel);
-           padding:12px 0 10px;margin:-14px 0 4px;
+           padding:12px 0 10px;margin:0 0 4px;
            border-bottom:1px solid var(--line);
            box-shadow:0 6px 12px -8px rgba(0,0,0,.85)}
   .presets button{font-size:12px;padding:8px 6px}
@@ -223,7 +230,12 @@
     #auto, #reload{font-size:11.5px;padding:5px 8px}
     #indBtn{font-size:11.5px;padding:5px 8px}
 
-    main{flex-direction:column}
+    main{flex-direction:column;
+      /* The collapsed sheet is a fixed strip pinned to the bottom of the
+         viewport. The chart sits in normal flow underneath it, so its time
+         axis - the very last row it draws - was rendering behind that strip
+         and was invisible on every phone. Reserve the strip's height. */
+      padding-bottom:var(--peek-safe)}
     #chartWrap{flex:1;min-height:44dvh}
     #panes .subpane{height:70px}
 
@@ -232,7 +244,10 @@
       position:fixed;left:0;right:0;bottom:0;width:auto;
       height:62dvh;border-left:0;border-top:1px solid var(--line);
       border-radius:16px 16px 0 0;z-index:80;
-      transform:translateY(calc(100% - 46px));
+      /* Show the whole tab bar, and clear the phone's gesture bar. At the old
+         flat 46px the bottom ~10px of the labels sat below the fold, and on
+         gesture-nav devices the home indicator overlapped them too. */
+      transform:translateY(calc(100% - var(--peek-safe)));
       transition:transform .25s cubic-bezier(.4,0,.2,1);
       box-shadow:0 -8px 30px rgba(0,0,0,.55)}
     aside.open{transform:translateY(0)}
@@ -397,8 +412,13 @@
     </div>
 
     <div class="pane" id="p-news">
+      <!-- top:0 with a negative top margin leaves a band the height of that
+           margin at the top of the scroll area, and headlines scroll through
+           it above the controls - which is why the "45 stories" summary row
+           appeared clipped between the tabs and the buttons. No negative
+           margin, no band. -->
       <div style="position:sticky;top:0;z-index:15;background:var(--panel);
-                  padding:12px 0 8px;margin:-14px 0 0;border-bottom:1px solid var(--line)">
+                  padding:12px 0 8px;border-bottom:1px solid var(--line)">
         <div style="display:flex;gap:7px;margin-bottom:7px">
           <button id="refreshNews" style="flex:1;font-size:12px">Refresh feed</button>
           <button id="pullNews" style="flex:1;font-size:12px">Pull latest news</button>
@@ -416,7 +436,7 @@
 
     <div class="pane" id="p-events">
       <div style="display:flex;gap:7px;position:sticky;top:0;z-index:15;
-                  background:var(--panel);padding:12px 0 10px;margin:-14px 0 4px;
+                  background:var(--panel);padding:12px 0 10px;margin:0 0 4px;
                   border-bottom:1px solid var(--line)">
         <select id="evKind" style="flex:1">
           <option value="fomc">FOMC</option>
@@ -430,7 +450,7 @@
 
     <div class="pane" id="p-smc">
       <div style="display:flex;gap:7px;position:sticky;top:0;z-index:15;
-                  background:var(--panel);padding:12px 0 10px;margin:-14px 0 4px;
+                  background:var(--panel);padding:12px 0 10px;margin:0 0 4px;
                   border-bottom:1px solid var(--line)">
         <button id="smcGo" style="flex:1;font-size:12px">Refresh SMC</button>
         <label class="opt" style="flex:0 0 auto;margin:0;padding:6px 9px" id="smcDraw">
@@ -750,8 +770,22 @@ function drawLegend(b){
 
 function clearLines(){ priceLines.forEach(l=>candles.removePriceLine(l)); priceLines=[]; }
 
+// The right price scale is about 90px wide on a phone. Every badge drawn there
+// covers a price gridline, and the SMC engine can emit 15+ levels at once -
+// which is how the axis became a stack of overlapping tags with the actual
+// prices hidden behind them. The lines still draw; only the axis badge is
+// rationed, and only on narrow screens. On desktop there is room, so nothing
+// changes there.
+function isNarrow(){ return window.matchMedia("(max-width: 900px)").matches; }
+const CORE_TAGS = /^(OP|MLP|BSL|SSL|ENTRY|SL|TP\d*)$/;
+function axisTag(title){
+  if(!title) return false;
+  return isNarrow() ? CORE_TAGS.test(String(title).trim()) : true;
+}
+
 function addLine(price,color,title,style=LWC.LineStyle.Dashed,width=1){
-  priceLines.push(candles.createPriceLine({price,color,lineWidth:width,lineStyle:style,axisLabelVisible:true,title}));
+  priceLines.push(candles.createPriceLine({price,color,lineWidth:width,lineStyle:style,
+    axisLabelVisible:axisTag(title),title}));
 }
 
 let firstLoad = true, lastFetch = null, marketOpen = false, lastClose = null;
@@ -1453,7 +1487,7 @@ function clearSMC(){ smcLines.forEach(l=>{ try{candles.removePriceLine(l);}catch
 function smcLine(price,color,title,width=1){
   if(price==null) return;
   smcLines.push(candles.createPriceLine({price,color,lineWidth:width,
-    lineStyle:LWC.LineStyle.Dashed,axisLabelVisible:true,title}));
+    lineStyle:LWC.LineStyle.Dashed,axisLabelVisible:axisTag(title),title}));
 }
 
 async function loadSMC(){
@@ -1793,13 +1827,22 @@ function drawIndicators(payload){
         if(spec.style === "level"){
           // Horizontal references, not curves. Only the levels you actually
           // trade off get an axis tag - tagging all 25 makes the axis
-          // unreadable, which defeats the point of showing them.
+          // unreadable, which defeats the point of showing them. On a phone
+          // even this list is too many, so it narrows to the four you place
+          // orders against. The lines themselves still draw either way.
           const major = /^(OP|MLP|BSL|SSL|KTR[+-][12]|swing_|premium|discount|equilibrium|demand_|supply_)/.test(key);
+          const tag = isNarrow() ? /^(OP|MLP|BSL|SSL)$/.test(key) : major;
           opts = {...opts,
                   lineWidth: /^(OP|BSL|SSL|swing_)/.test(key) ? 2 : 1,
                   lineStyle: LWC.LineStyle.Dashed,
-                  lastValueVisible: major,
-                  title: major ? key.replace(/_/g," ") : ""};
+                  lastValueVisible: tag,
+                  // Reference levels are annotations, not price data. Letting
+                  // KTR+-2 and friends drive autoscale stretched the axis to
+                  // ~190pts for 60pts of candles, so two thirds of the chart
+                  // was empty - which is what you saw when the sheet covered
+                  // the rest. They still draw; they just do not vote on range.
+                  autoscaleInfoProvider: () => null,
+                  title: tag ? key.replace(/_/g," ") : ""};
         }
         const s = chart.addSeries(LWC.LineSeries, opts);
         s.setData(pts.map(p=>({...p, time: shift(p.time)})));
@@ -2012,6 +2055,21 @@ document.addEventListener("click", e=>{
 // ---------- mobile bottom sheet ----------
 const isMobile = () => window.matchMedia("(max-width: 900px)").matches;
 
+// The sheet is position:fixed, so opening it does not resize the chart - it
+// just covers the bottom ~62% of it. The candles sit mid-axis, which is the
+// part now hidden, leaving the visible strip blank. Weighting the price
+// scale's bottom margin pushes the action up into that strip, so the chart
+// stays useful with the panel open. Restored on close.
+function fitChartToSheet(open){
+  if(!chart) return;
+  try{
+    chart.priceScale("right").applyOptions({
+      scaleMargins: (open && isNarrow()) ? {top:.06, bottom:.58}
+                                         : {top:.1,  bottom:.1}
+    });
+  }catch{}
+}
+
 // Capture the visible bar range now, put it back once the layout has settled.
 // Anything that resizes the chart box goes through this: the sheet sliding
 // open, a rotation. Without it the chart re-fits and appears to jump to a
@@ -2040,6 +2098,7 @@ function initSheet(){
       }else{
         aside.classList.add("open");
       }
+      fitChartToSheet(aside.classList.contains("open"));
       // Opening the sheet changes the chart's HEIGHT, not its data. The old
       // code called fitContent() here, which re-fits every loaded bar into the
       // new box and throws away wherever you had scrolled to - that is the
@@ -2058,15 +2117,15 @@ function initSheet(){
   aside.addEventListener("touchmove", e=>{
     if(startY === null) return;
     const dy = e.touches[0].clientY - startY;
-    if(dy > 40){ aside.classList.remove("open"); startY = null; }
-    if(dy < -40){ aside.classList.add("open"); startY = null; }
+    if(dy > 40){ aside.classList.remove("open"); fitChartToSheet(false); startY = null; }
+    if(dy < -40){ aside.classList.add("open");  fitChartToSheet(true);  startY = null; }
   }, {passive:true});
   aside.addEventListener("touchend", ()=>{ startY = null; }, {passive:true});
 
   // Typing should always reveal the conversation.
   const inp = document.getElementById("inp");
   if(inp) inp.addEventListener("focus", ()=>{
-    if(isMobile()) aside.classList.add("open");
+    if(isMobile()){ aside.classList.add("open"); fitChartToSheet(true); }
   });
 }
 
