@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+venv/
+.env
+*.env
+!.env.example
+
+# runtime state - machine-specific, not source
+runtime_config.json
+event_dates.json
+data_routes.json
+
+# Signal history. Machine-local and irreplaceable - a git checkout must
+# never clobber the record of what was actually called.
+data/
+*.db

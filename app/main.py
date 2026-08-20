@@ -82,6 +82,24 @@ def terminal():
     return FileResponse(index)
 
 
+@app.get("/sw.js")
+def service_worker():
+    """The push service worker, at the origin root.
+
+    Path matters: a worker served from a subdirectory only gets scope over that
+    subdirectory, so it has to live at "/". The Service-Worker-Allowed header
+    makes that explicit, and the no-cache header means a fixed worker actually
+    reaches the browser instead of sitting behind a stale cached copy.
+    """
+    sw = _STATIC / "sw.js"
+    if not sw.exists():
+        raise HTTPException(404, "static/sw.js not found")
+    return FileResponse(sw, media_type="application/javascript", headers={
+        "Service-Worker-Allowed": "/",
+        "Cache-Control": "no-cache",
+    })
+
+
 @app.get("/smc/ktr-debug/{symbol}")
 def ktr_debug(symbol: str, timeframe: str = "15m"):
     """Every KTR convention side by side, to match against TradingView.
@@ -448,6 +466,95 @@ def price_tick(symbol: str, timeframe: str = "5m"):
     }
 
 
+@app.get("/push/key")
+def push_key():
+    """VAPID public key the browser needs in order to subscribe."""
+    from .webpush import count, public_key
+    return {"public_key": public_key(), "subscribers": count()}
+
+
+class PushSub(BaseModel):
+    subscription: dict
+    label: str = ""
+
+
+@app.post("/push/subscribe")
+def push_subscribe(payload: PushSub):
+    from .webpush import add_subscription, count
+    ok = add_subscription(payload.subscription, payload.label)
+    if not ok:
+        raise HTTPException(400, "subscription missing an endpoint")
+    return {"ok": True, "subscribers": count()}
+
+
+@app.post("/push/unsubscribe")
+def push_unsubscribe(payload: PushSub):
+    from .webpush import count, remove_subscription
+    remove_subscription(payload.subscription.get("endpoint", ""))
+    return {"ok": True, "subscribers": count()}
+
+
+@app.get("/push/test")
+def push_test():
+    """Fire a test notification at every subscribed browser."""
+    from .webpush import count, send
+    if not count():
+        return {"ok": False,
+                "verdict": "No browser is subscribed yet.",
+                "fix": "Open the terminal, tap the 🔔 button and allow "
+                       "notifications, then reload this page."}
+    ok, detail = send("Terminal connected",
+                      "Entry alerts will appear here, even with the tab closed.")
+    return {"ok": ok, "subscribers": count(), "detail": detail,
+            "verdict": "Check your phone." if ok else "Every subscription failed."}
+
+
+@app.get("/alerts/status")
+def alerts_status():
+    """Is the alert scanner alive, and what has it recorded? Open in a browser."""
+    from .alerts import status
+    return status()
+
+
+@app.get("/alerts/test")
+def alerts_test():
+    """Send one test push to every configured channel. Open in a browser."""
+    from .alerts import channels, notify
+    import secrets
+
+    active = channels()
+    if not active:
+        return {
+            "ok": False,
+            "verdict": "No push channel is configured.",
+            "easiest": "ntfy - free, no signup, real phone notifications.",
+            "how": [
+                "Install the 'ntfy' app from Google Play or the App Store.",
+                "In the app tap + and subscribe to the topic below.",
+                "Put NTFY_TOPIC in .env on the server, restart, reload this page.",
+            ],
+            # Public ntfy topics are readable by anyone who knows the name, so
+            # hand out a random one rather than letting a guessable one get used.
+            "suggested_NTFY_TOPIC": "zoqira-" + secrets.token_hex(8),
+        }
+
+    ok, detail = notify(
+        "Terminal connected",
+        "Entry alerts will arrive here.\nThis is a test message.", high=False)
+    return {"ok": ok, "channels": active, "detail": detail,
+            "verdict": "Check your phone." if ok else "Every channel failed."}
+
+
+@app.get("/alerts/scan")
+def alerts_scan(symbol: str = "XAUUSD", timeframe: str = "15m"):
+    """Run one scan right now, without waiting for the loop. Safe to re-run."""
+    from .alerts import scan_once
+    try:
+        return scan_once(symbol, timeframe)
+    except Exception as e:
+        raise HTTPException(503, f"{type(e).__name__}: {e}")
+
+
 @app.get("/candles/{symbol}/history")
 def candles_history(symbol: str, timeframe: str = "15m", limit: int = 300,
                     end: str = ""):
@@ -582,12 +689,21 @@ def candles(symbol: str, timeframe: str = "15m", limit: int = 300,
 @app.on_event("startup")
 def _boot():
     """Warm the calendar so the first chart load already has the badge."""
+    import logging
+    _log = logging.getLogger(__name__)
     try:
         refresh_calendar()
         capture(all_events())   # learn real release times for the history engine
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning("calendar warmup failed: %s", e)
+        _log.warning("calendar warmup failed: %s", e)
+
+    # Entry alerts. start() is a no-op unless ALERTS_ENABLED=1, and it creates
+    # the SQLite file either way so /alerts/status always answers.
+    try:
+        from .alerts import start as start_alerts
+        start_alerts()
+    except Exception as e:
+        _log.warning("alert scanner failed to start: %s", e)
 
 
 @app.get("/events/{symbol}")

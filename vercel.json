@@ -1,9 +1,19 @@
 {
   "version": 2,
   "builds": [
-    { "src": "static/index.html", "use": "@vercel/static" }
+    { "src": "static/index.html", "use": "@vercel/static" },
+    { "src": "static/sw.js", "use": "@vercel/static" }
   ],
   "routes": [
+    {
+      "src": "/sw.js",
+      "dest": "/static/sw.js",
+      "headers": {
+        "Service-Worker-Allowed": "/",
+        "Cache-Control": "no-cache",
+        "Content-Type": "application/javascript"
+      }
+    },
     { "src": "/(.*)", "dest": "/static/index.html" }
   ]
 }
