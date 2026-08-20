@@ -1311,14 +1311,21 @@ function renderNews(d){
         }).join("")+(i.scored_by==="rules"
           ?`<span class="tag" style="color:var(--dim)" title="keyword rules">rules</span>`:"")
       : `<span class="tag" style="color:var(--dim)">no signal</span>`;
+    // published_at falls back to fetch time when the feed's date could not be
+    // parsed, so a day-old story would otherwise read a confident "36m ago".
+    // date_known tells us which it is; say so rather than inventing a time.
+    const known = i.date_known !== false;
     const ms = Date.now()-new Date(i.published_at).getTime();
     const s2 = Math.floor(ms/1000);
-    const t = s2<60?"just now":s2<3600?Math.floor(s2/60)+"m ago":s2<86400?Math.floor(s2/3600)+"h ago":Math.floor(s2/86400)+"d ago";
+    const rel = s2<60?"just now":s2<3600?Math.floor(s2/60)+"m ago":s2<86400?Math.floor(s2/3600)+"h ago":Math.floor(s2/86400)+"d ago";
+    const t = known ? rel : "time unknown";
+    const tTitle = known ? i.published_at
+      : "Feed sent no readable publish date. Fetched "+rel+".";
     return `<div class="news-item">
       <div class="news-head">
         <span class="imp ${i.impact}">${i.impact}</span>
         <span class="news-src">${i.source||""}</span>
-        <span class="news-time" title="${i.published_at}">${t}</span>
+        <span class="news-time" title="${tTitle}"${known?"":' style="color:var(--dim);font-style:italic"'}>${t}</span>
       </div>
       <div class="news-title">${i.url
         ? `<a href="${i.url}" target="_blank">${i.title}</a>`
@@ -2001,6 +2008,21 @@ document.addEventListener("click", e=>{
 // ---------- mobile bottom sheet ----------
 const isMobile = () => window.matchMedia("(max-width: 900px)").matches;
 
+// Capture the visible bar range now, put it back once the layout has settled.
+// Anything that resizes the chart box goes through this: the sheet sliding
+// open, a rotation. Without it the chart re-fits and appears to jump to a
+// different part of the session.
+function holdRangeThrough(delay){
+  let range = null;
+  try{ range = chart.timeScale().getVisibleLogicalRange(); }catch{}
+  setTimeout(()=>{
+    try{
+      if(range) chart.timeScale().setVisibleLogicalRange(range);
+      paintZones();
+    }catch{}
+  }, delay);
+}
+
 function initSheet(){
   const aside = document.querySelector("aside");
   if(!aside) return;
@@ -2014,7 +2036,12 @@ function initSheet(){
       }else{
         aside.classList.add("open");
       }
-      setTimeout(()=>{ try{ chart.timeScale().fitContent(); }catch{} }, 280);
+      // Opening the sheet changes the chart's HEIGHT, not its data. The old
+      // code called fitContent() here, which re-fits every loaded bar into the
+      // new box and throws away wherever you had scrolled to - that is the
+      // jump you see the moment the panel slides up. autoSize already handles
+      // the resize; we only have to hold the horizontal range across it.
+      holdRangeThrough(280);
     });
   });
 
@@ -2040,9 +2067,7 @@ function initSheet(){
 }
 
 // Chart height changes when the sheet moves or the device rotates.
-window.addEventListener("orientationchange", ()=>{
-  setTimeout(()=>{ try{ chart.timeScale().fitContent(); paintZones(); }catch{} }, 300);
-});
+window.addEventListener("orientationchange", ()=>{ holdRangeThrough(300); });
 
 // ---------- wiring ----------
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{

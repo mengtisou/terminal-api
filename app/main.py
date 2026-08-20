@@ -782,6 +782,42 @@ def news_live(symbol: str = "XAUUSD", limit: int = 30, ai_tag: int = 40):
     return fetch_live(symbol, limit, ai_tag=ai_tag)
 
 
+@app.get("/news/dates")
+def news_dates(per_feed: int = 3):
+    """Raw publish date from each feed, next to what we parsed it as.
+
+    Declared before /news/{symbol} so it is not read as a symbol.
+
+    This exists because "why does a day-old story say 36m ago" has two very
+    different answers and they are indistinguishable from the panel:
+      - parsed: null   -> our parser does not know the format; that is our bug
+      - parsed correct, but later than the article page says -> the feed is
+        republishing old stories with a fresh timestamp, which no amount of
+        parsing fixes
+    """
+    from .news import FEEDS, _fetch_feed, _iso
+
+    out = []
+    for name, url in FEEDS:
+        for raw in _fetch_feed(name, url)[:per_feed]:
+            got = raw.get("published") or ""
+            parsed = _iso(got)
+            out.append({
+                "feed": name,
+                "title": raw.get("title", "")[:70],
+                "raw_date": got,
+                "parsed_utc": parsed,
+                "ok": bool(parsed),
+            })
+    bad = [r for r in out if not r["ok"]]
+    return {
+        "sampled": len(out),
+        "unparsed": len(bad),
+        "unparsed_formats": sorted({r["raw_date"] for r in bad})[:10],
+        "items": out,
+    }
+
+
 @app.get("/news/feeds")
 def news_feeds():
     """Per-feed reachability. Run this when the news panel comes back empty.

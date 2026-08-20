@@ -922,8 +922,14 @@ def _iso(raw: str | None) -> str | None:
         pass
 
     for fmt in ("%a, %d %b %Y %H:%M:%S %z", "%a, %d %b %Y %H:%M:%S %Z",
+                "%a, %d %b %Y %H:%M %z", "%a, %d %b %Y %H:%M %Z",
                 "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%SZ",
-                "%Y-%m-%d %H:%M:%S", "%d %b %Y %H:%M:%S %z"):
+                "%Y-%m-%dT%H:%M:%S.%f%z",
+                "%Y-%m-%d %H:%M:%S", "%d %b %Y %H:%M:%S %z",
+                # Site-display formats, seen when a publisher puts the rendered
+                # date in the feed instead of an RFC 2822 one.
+                "%m/%d/%Y, %I:%M %p", "%m/%d/%Y %I:%M %p",
+                "%b %d, %Y %I:%M %p", "%b %d, %Y"):
         try:
             d = dt.datetime.strptime(raw, fmt)
             if d.tzinfo is None:
@@ -932,7 +938,7 @@ def _iso(raw: str | None) -> str | None:
         except ValueError:
             continue
 
-    log.debug("unparsed date: %r", raw)
+    log.warning("unparsed publish date %r - headline will show as just-fetched", raw)
     return None
 
 
