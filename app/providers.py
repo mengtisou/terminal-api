@@ -17,6 +17,7 @@ That keeps chat.py provider-agnostic.
 from __future__ import annotations
 
 import json
+import copy
 import os
 from pathlib import Path
 from typing import Iterator, Protocol
@@ -303,6 +304,51 @@ class GeminiProvider:
 
 # ------------------------------------------------------------------- OpenAI
 
+def _strictify(node):
+    """Make a JSON Schema satisfy OpenAI's structured-output rules.
+
+    Strict mode demands that EVERY key in `properties` also appears in
+    `required`, and that `additionalProperties` is false - on every nested
+    object, not just the top level. A schema with an optional field is rejected
+    outright, which is what produced:
+
+        Invalid schema for response_format 'result': 'required' is required to
+        be supplied and to be an array including every key in properties.
+        Missing 'key_levels_used'.
+
+    Fields that were genuinely optional are made nullable instead of dropped,
+    so the model can still say "I have nothing for this" by returning null
+    rather than omitting the key. Works on a deep copy - the caller's schema is
+    shared across providers and must not be mutated.
+    """
+    if not isinstance(node, dict):
+        return node
+    out = copy.deepcopy(node) if node is not None else node
+
+    if "properties" in out or out.get("type") == "object":
+        props = out.get("properties") or {}
+        optional = set(props) - set(out.get("required") or list(props))
+        for k, v in list(props.items()):
+            child = _strictify(v)
+            if k in optional:
+                t = child.get("type")
+                if isinstance(t, str) and t != "null":
+                    child["type"] = [t, "null"]
+                elif isinstance(t, list) and "null" not in t:
+                    child["type"] = t + ["null"]
+            props[k] = child
+        out["properties"] = props
+        out["required"] = list(props)
+        out["additionalProperties"] = False
+
+    if isinstance(out.get("items"), dict):
+        out["items"] = _strictify(out["items"])
+    for key in ("anyOf", "oneOf", "allOf"):
+        if isinstance(out.get(key), list):
+            out[key] = [_strictify(x) for x in out[key]]
+    return out
+
+
 class OpenAIProvider:
     name = "openai"
     BASE = "https://api.openai.com/v1"
@@ -317,8 +363,7 @@ class OpenAIProvider:
         return {"Authorization": f"Bearer {k}", "Content-Type": "application/json"}
 
     def json_call(self, *, model, system, user, schema, max_tokens=1500) -> dict:
-        strict = dict(schema)
-        strict.setdefault("additionalProperties", False)
+        strict = _strictify(schema)
         r = httpx.post(
             f"{self.BASE}/chat/completions",
             headers=self._headers(),
