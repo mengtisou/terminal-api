@@ -295,8 +295,13 @@ def council(*, system, user, schema, max_tokens=1500) -> tuple[dict, list[dict]]
     if two models read the same snapshot and reach opposite conclusions, the
     setup is not clear enough to trade.
     """
-    votes = []
-    for name, model in active("reasoning"):
+    votes, failures = [], []
+    members = active("reasoning")
+    if not members:
+        raise LLMError("no reasoning provider configured - set a key and "
+                       "REASONING_CHAIN in .env")
+
+    for name, model in members:
         try:
             v = providers.get(name).json_call(
                 model=model, system=system, user=user,
@@ -304,10 +309,14 @@ def council(*, system, user, schema, max_tokens=1500) -> tuple[dict, list[dict]]
             v["_provider"] = f"{name}/{model}"
             votes.append(v)
         except Exception as e:
+            # Keep the reason. "no council member responded" on its own is
+            # unactionable - the caller cannot tell a bad key from a wrong
+            # model name from a rate limit.
+            failures.append(f"{name}/{model}: {type(e).__name__}: {e}")
             log.warning("council member %s failed: %s", name, e)
 
     if not votes:
-        raise LLMError("no council member responded")
+        raise LLMError("no council member responded | " + " | ".join(failures))
     if len(votes) == 1:
         return votes[0], votes
 

@@ -478,7 +478,16 @@
     </div>
 
     <div class="pane" id="p-signal">
-      <button class="primary" id="gen" style="width:100%;margin-bottom:12px">Generate signal</button>
+      <button class="primary" id="gen" data-ai style="width:100%;margin-bottom:12px">Generate signal</button>
+      <!-- Shown only when the backend says the AI is locked. Charts, levels and
+           news all keep working without a key, so this is a note, not a wall. -->
+      <div id="aiLockBar" style="display:none;align-items:center;gap:8px;
+           margin-bottom:12px;padding:8px 10px;font-size:12px;
+           background:rgba(227,160,8,.14);border:1px solid var(--warn);
+           border-radius:8px;color:var(--text)">
+        <span style="flex:1">AI features need an access key. Charts and news stay available.</span>
+        <button id="aiUnlock" style="font-size:11.5px;padding:4px 9px">Enter key</button>
+      </div>
       <div id="sigOut"><div class="empty">No signal yet.</div></div>
     </div>
 
@@ -533,7 +542,7 @@
 
     <div class="composer">
       <input id="inp" placeholder="Ask about this chart…" autocomplete="off">
-      <button id="send">Send</button>
+      <button id="send" data-ai>Send</button>
     </div>
   </aside>
 </main>
@@ -587,61 +596,36 @@ window.fetch = async (input, init = {}) => {
     init.headers = {...(init.headers || {}), "X-Access-Key": ACCESS_KEY};
   }
   const res = await _fetch(input, init);
-  if (res.status === 401 && url && url.startsWith(API)) showLogin();
+  // A 401 now means only "this one AI feature is locked" - charts, levels and
+  // news still work without a key. So mark the AI controls instead of throwing
+  // a wall in front of the whole terminal.
+  if (res.status === 401 && url && url.startsWith(API)) markAiLocked();
   return res;
 };
 
-function showLogin(){
-  if (document.getElementById("loginGate")) return;   // one at a time
-  const wrap = document.createElement("div");
-  wrap.id = "loginGate";
-  wrap.style.cssText =
-    "position:fixed;inset:0;z-index:9999;background:rgba(13,17,23,.94);"
-    + "display:grid;place-items:center;padding:24px";
-  wrap.innerHTML = `
-    <div style="width:100%;max-width:340px;background:var(--panel);
-                border:1px solid var(--line);border-radius:14px;padding:20px">
-      <div style="font-size:15px;font-weight:600;margin-bottom:6px">Terminal locked</div>
-      <div style="font-size:12.5px;color:var(--muted);line-height:1.5;margin-bottom:14px">
-        This terminal runs on paid AI credits, so it needs an access key.
-      </div>
-      <input id="loginKey" type="password" placeholder="Access key"
-             autocomplete="current-password"
-             style="width:100%;padding:10px;font-size:14px;background:var(--bg);
-                    color:var(--text);border:1px solid var(--line);
-                    border-radius:8px;margin-bottom:10px">
-      <div id="loginErr" style="display:none;font-size:12px;color:var(--danger);
-                                margin-bottom:8px"></div>
-      <button id="loginGo" style="width:100%;padding:10px;font-size:14px">Unlock</button>
-    </div>`;
-  document.body.appendChild(wrap);
+let aiLocked = false;
+function markAiLocked(){
+  if (aiLocked) return;
+  aiLocked = true;
+  document.querySelectorAll("[data-ai]").forEach(b=>{
+    b.disabled = true;
+    b.title = "Needs an access key - this uses paid AI credits";
+    b.style.opacity = ".55";
+  });
+  const bar = document.getElementById("aiLockBar");
+  if (bar) bar.style.display = "flex";
+}
 
-  const input = wrap.querySelector("#loginKey");
-  const err = wrap.querySelector("#loginErr");
-  input.focus();
-
-  const submit = async () => {
-    const key = input.value.trim();
-    if (!key) return;
-    err.style.display = "none";
-    try{
-      // Verify before saving, so a typo does not get remembered and lock you
-      // into a loop of empty panels.
-      const r = await _fetch(`${API}/providers`, {headers: {"X-Access-Key": key}});
-      if (r.status === 401){
-        err.textContent = "That key was rejected.";
-        err.style.display = "";
-        return;
-      }
+function promptForKey(){
+  const key = (prompt("Access key for AI features") || "").trim();
+  if (!key) return;
+  _fetch(`${API}/llm/test?role=cheap`, {headers: {"X-Access-Key": key}})
+    .then(r => {
+      if (r.status === 401){ alert("That key was rejected."); return; }
       try{ localStorage.setItem("accessKey", key); }catch{}
       location.reload();
-    }catch{
-      err.textContent = "Could not reach the server.";
-      err.style.display = "";
-    }
-  };
-  wrap.querySelector("#loginGo").onclick = submit;
-  input.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+    })
+    .catch(()=> alert("Could not reach the server."));
 }
 
 // ---------- session clock ----------
@@ -3247,6 +3231,8 @@ if(_drawClear) _drawClear.onclick = ()=>{
 };
 const _installBtn = document.getElementById("installBtn");
 if(_installBtn) _installBtn.onclick = installApp;
+const _aiUnlock = document.getElementById("aiUnlock");
+if(_aiUnlock) _aiUnlock.onclick = promptForKey;
 const _bellBtn = document.getElementById("bellBtn");
 if(_bellBtn){ _bellBtn.onclick = togglePush; updateBell(); }
 const _noteBtn = document.getElementById("noteBtn");

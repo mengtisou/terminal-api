@@ -38,21 +38,33 @@ ACCESS_KEY = os.getenv("ACCESS_KEY", "")
 
 # Endpoints that cost nothing and reveal nothing stay open, so the frontend can
 # tell "wrong key" apart from "server down".
-# The PWA assets must be open too: a service worker that 401s cannot register,
-# which silently kills both the install prompt and push notifications. The
-# manifest and icons are fetched by the browser itself, which never sends our
-# header, so gating them would break installation with no visible error.
-_OPEN_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc",
-               "/docs/oauth2-redirect",
-               "/sw.js", "/manifest.webmanifest",
-               "/icon-192.png", "/icon-512.png",
-               "/icon-maskable-512.png", "/apple-touch-icon.png"}
+# Only the endpoints that SPEND MONEY are gated. Charts, levels, SMC, the news
+# feed and the event calendar stay open to everyone: they cost a fixed amount to
+# serve regardless of who asks, and locking the whole terminal behind a password
+# makes it useless to show anyone. What is protected is the AI - chat, signal
+# generation, AI news tagging - because each of those calls a paid model.
+_AI_PREFIXES = ("/chat", "/signal", "/analyze", "/council", "/review",
+                "/llm/", "/news/ingest", "/news/tag-test", "/alerts/scan")
+
+
+def _needs_key(path: str, query) -> bool:
+    if path.startswith(_AI_PREFIXES):
+        return True
+    # /news/live is free with keyword scoring but costs money once it tags,
+    # so gate exactly the paid variant rather than the whole endpoint.
+    if path == "/news/live":
+        try:
+            return int(query.get("ai_tag", "0") or 0) > 0
+        except ValueError:
+            return False
+    return False
 
 
 @app.middleware("http")
 async def require_access_key(request: Request, call_next):
-    if not ACCESS_KEY or request.method == "OPTIONS" \
-            or request.url.path in _OPEN_PATHS:
+    if not ACCESS_KEY or request.method == "OPTIONS":
+        return await call_next(request)
+    if not _needs_key(request.url.path, request.query_params):
         return await call_next(request)
 
     supplied = (request.headers.get("x-access-key")
@@ -61,10 +73,12 @@ async def require_access_key(request: Request, call_next):
     # was correct.
     if not secrets.compare_digest(supplied, ACCESS_KEY):
         return JSONResponse(
-            {"detail": "Missing or invalid access key. Append ?key=... to the "
-                       "frontend URL, or send an X-Access-Key header."},
+            {"detail": "This feature uses paid AI credits and needs an access key.",
+             "ai_locked": True},
             status_code=401)
     return await call_next(request)
+
+
 # ALLOWED_ORIGINS lets a hosted frontend (GitHub Pages, a CDN) talk to a
 # backend running elsewhere. "*" is fine while the backend is local-only and
 # holds no user data, but set it explicitly the moment it is public.
@@ -544,6 +558,49 @@ def push_test():
                       "Entry alerts will appear here, even with the tab closed.")
     return {"ok": ok, "subscribers": count(), "detail": detail,
             "verdict": "Check your phone." if ok else "Every subscription failed."}
+
+
+@app.get("/llm/test")
+def llm_test(role: str = "reasoning"):
+    """Call every provider in a role's chain and report exactly what happened.
+
+    Open in a browser. "Blocked: model error" tells you nothing on its own;
+    this names the provider, the model string it tried, and the error text.
+    """
+    from . import providers as pv
+    from .llm import active
+
+    chain = active(role)
+    if not chain:
+        return {"role": role, "ok": False,
+                "verdict": f"No provider configured for '{role}'.",
+                "fix": f"Set {role.upper()}_CHAIN in .env and a matching API key."}
+
+    schema = {"type": "object", "additionalProperties": False,
+              "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
+    results = []
+    for name, model in chain:
+        entry = {"provider": name, "model": model}
+        try:
+            pv.get(name).json_call(
+                model=model, system="Reply with JSON only.",
+                user='Return {"ok": true}', schema=schema, max_tokens=64)
+            entry["status"] = "ok"
+        except Exception as e:
+            entry["status"] = "failed"
+            entry["error"] = f"{type(e).__name__}: {e}"[:400]
+        results.append(entry)
+
+    working = [r for r in results if r["status"] == "ok"]
+    return {
+        "role": role,
+        "ok": bool(working),
+        "chain": [f"{n}/{m}" for n, m in chain],
+        "results": results,
+        "verdict": (f"{len(working)}/{len(results)} providers responded."
+                    if working else
+                    "Every provider in this chain failed - see 'error' on each."),
+    }
 
 
 @app.get("/alerts/status")
