@@ -100,6 +100,33 @@ def service_worker():
     })
 
 
+@app.get("/manifest.webmanifest")
+def manifest():
+    """Makes the terminal installable. Must be at the origin root to match scope."""
+    f = _STATIC / "manifest.webmanifest"
+    if not f.exists():
+        raise HTTPException(404, "static/manifest.webmanifest not found")
+    return FileResponse(f, media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/{icon}.png")
+def app_icon(icon: str):
+    """App icons, at the root because the manifest references them from there.
+
+    Restricted to a known list - a bare .png route would otherwise serve any
+    file in static/ to anyone who guesses its name.
+    """
+    allowed = {"icon-192", "icon-512", "icon-maskable-512", "apple-touch-icon"}
+    if icon not in allowed:
+        raise HTTPException(404, "unknown icon")
+    f = _STATIC / f"{icon}.png"
+    if not f.exists():
+        raise HTTPException(404, f"static/{icon}.png not found")
+    return FileResponse(f, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.get("/smc/ktr-debug/{symbol}")
 def ktr_debug(symbol: str, timeframe: str = "15m"):
     """Every KTR convention side by side, to match against TradingView.

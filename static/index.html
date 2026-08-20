@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<!-- iOS ignores the manifest's display mode; these are what make Add to Home
+     Screen open full-screen instead of inside Safari chrome. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Terminal">
 <title>Terminal</title>
 <script src="https://unpkg.com/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js"></script>
 <style>
@@ -316,6 +323,7 @@
   <input type="date" id="histDate" title="Jump to a past date"
          style="font-size:11.5px;padding:5px 6px;background:var(--panel);
                 color:var(--text);border:1px solid var(--line);border-radius:6px">
+  <button id="installBtn" style="display:none" title="Install as an app">⤓ Install</button>
   <button id="bellBtn" title="Enable phone notifications for entry signals">🔔</button>
   <button id="noteBtn" title="Tap to arm, then tap a price on the chart">✎ Note</button>
   <button id="indBtn" title="Indicators">Indicators</button>
@@ -1071,6 +1079,48 @@ function noteAt(y){
     if(c != null && Math.abs(c - y) < 10) return n;
   }
   return null;
+}
+
+// --- install as an app (PWA) -------------------------------------------------
+// Chrome fires beforeinstallprompt when the app qualifies: https, a manifest,
+// and a service worker with a fetch handler. Capturing the event lets us show
+// our own button instead of relying on the easily-missed browser menu item.
+let deferredInstall = null;
+window.addEventListener("beforeinstallprompt", e=>{
+  e.preventDefault();
+  deferredInstall = e;
+  const b = document.getElementById("installBtn");
+  if(b) b.style.display = "";
+});
+window.addEventListener("appinstalled", ()=>{
+  deferredInstall = null;
+  const b = document.getElementById("installBtn");
+  if(b) b.style.display = "none";
+});
+
+async function installApp(){
+  if(!deferredInstall){
+    // iOS never fires the event, and Chrome hides it once installed.
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    alert(ios
+      ? "On iPhone: tap Share, then 'Add to Home Screen'."
+      : "Already installed, or use the browser menu (⋮) then 'Install app'.");
+    return;
+  }
+  deferredInstall.prompt();
+  await deferredInstall.userChoice;
+  deferredInstall = null;
+  const b = document.getElementById("installBtn");
+  if(b) b.style.display = "none";
+}
+
+// Register the worker on load, not only when the bell is tapped - the install
+// prompt needs an active worker before the user touches anything.
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("/sw.js").catch(e=>
+      console.warn("service worker registration failed:", e));
+  });
 }
 
 // --- browser push notifications -----------------------------------------------
@@ -2868,6 +2918,8 @@ if(_drawClear) _drawClear.onclick = ()=>{
     drawings = []; saveDrawings(); redrawDrawings();
   }
 };
+const _installBtn = document.getElementById("installBtn");
+if(_installBtn) _installBtn.onclick = installApp;
 const _bellBtn = document.getElementById("bellBtn");
 if(_bellBtn){ _bellBtn.onclick = togglePush; updateBell(); }
 const _noteBtn = document.getElementById("noteBtn");

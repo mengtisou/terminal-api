@@ -5,6 +5,26 @@
 self.addEventListener("install", e => self.skipWaiting());
 self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
 
+/* Chrome will not offer "Install app" unless the worker handles fetch. This is
+   deliberately a pass-through: caching a trading terminal would be actively
+   harmful, since a stale chart or a stale price is worse than no chart. The
+   only thing served from cache is a plain offline message when the network is
+   genuinely gone, so the app does not open to a blank white screen. */
+self.addEventListener("fetch", event => {
+  if(event.request.method !== "GET") return;
+  event.respondWith(
+    fetch(event.request).catch(() =>
+      event.request.mode === "navigate"
+        ? new Response(
+            "<body style='background:#0d1117;color:#8b98a8;font:15px system-ui;" +
+            "display:grid;place-items:center;height:100vh;margin:0'>" +
+            "<div>Offline — reconnect to load live prices.</div></body>",
+            {headers: {"Content-Type": "text/html"}})
+        : Response.error()
+    )
+  );
+});
+
 self.addEventListener("push", event => {
   let data = {title: "Terminal alert", body: "", url: "/"};
   try{
