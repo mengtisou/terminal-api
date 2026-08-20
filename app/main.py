@@ -974,8 +974,80 @@ def snapshot(symbol: str, timeframe: str = "15m"):
 
 
 @app.post("/signal/{symbol}")
-def signal(symbol: str, timeframe: str = "15m"):
-    return generate_signal(symbol, timeframe)
+def signal(symbol: str, timeframe: str = "15m", push: bool = True):
+    """Generate a signal, record it, and push it if it is tradeable.
+
+    Recording matters more than the push: a signal that is never written down
+    can never be scored, and "was I right?" is the only question that settles
+    whether any of this analysis works. So every tradeable result goes into the
+    same table the background scanner writes to, whether you asked for it by
+    hand or the scanner found it.
+    """
+    return _signal_and_record(symbol, timeframe, push, source="manual")
+
+
+def _signal_and_record(symbol: str, timeframe: str, push: bool, source: str):
+    import datetime as dt
+
+    from .alerts import (already_seen, format_alert, notify, record,
+                         mark_pushed, MIN_CONFIDENCE)
+
+    result = generate_signal(symbol, timeframe)
+    bias = result.get("bias")
+    if bias not in ("long", "short"):
+        return result                      # no_trade or an error - nothing to log
+
+    # One row per bar per direction, so hammering the button does not fill the
+    # table with duplicates of the same idea.
+    bar = result.get("as_of") or dt.datetime.now(dt.timezone.utc).isoformat()
+    fp = f"{symbol}|{timeframe}|{bar}|{bias}|{source}"
+
+    if already_seen(fp):
+        result["recorded"] = "duplicate"
+        return result
+
+    sig = {
+        "fingerprint": fp, "symbol": symbol, "timeframe": timeframe,
+        "direction": bias, "bar_time": bar,
+        "entry": result.get("entry"), "stop_loss": result.get("stop_loss"),
+        "take_profit": result.get("take_profit") or [],
+        "confidence": result.get("confidence"),
+        "trigger": source, "reasoning": result.get("reasoning") or "",
+    }
+    row_id = record(sig)
+    result["recorded"] = row_id
+
+    conf = sig["confidence"] or 0
+    if push and row_id and conf >= MIN_CONFIDENCE:
+        title, body = format_alert(sig)
+        ok, detail = notify(title, body, high=True)
+        result["pushed"] = ok
+        result["push_detail"] = detail
+        if ok:
+            mark_pushed(row_id)
+    elif push and row_id:
+        result["pushed"] = False
+        result["push_detail"] = f"confidence {conf} below {MIN_CONFIDENCE}"
+    return result
+
+
+@app.get("/alerts/preview")
+def alerts_preview(direction: str = "long"):
+    """Send a sample entry alert, so you can see what a real one looks like."""
+    from .alerts import channels, format_alert, notify
+
+    if not channels():
+        return {"ok": False,
+                "verdict": "No push channel configured.",
+                "fix": "Tap the bell in the terminal, or set NTFY_TOPIC in .env."}
+    sig = {"symbol": "XAUUSD", "timeframe": "15m", "direction": direction,
+           "entry": 4493.20, "stop_loss": 4485.00,
+           "take_profit": [4505.00, 4515.00], "confidence": 0.72,
+           "trigger": "preview", "reasoning": "Sample alert - not a real signal."}
+    title, body = format_alert(sig)
+    ok, detail = notify(title, body, high=True)
+    return {"ok": ok, "channels": channels(), "detail": detail,
+            "sent": {"title": title, "body": body}}
 
 
 @app.get("/news")
