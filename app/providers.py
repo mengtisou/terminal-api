@@ -499,12 +499,45 @@ class DeepSeekProvider(OpenAIProvider):
         return parsed
 
 
+class OpenRouterProvider(OpenAIProvider):
+    """OpenRouter. One key, one endpoint, hundreds of models behind it.
+
+    OpenAI-compatible, so only the base URL, key and two extra headers differ.
+    Those headers (HTTP-Referer / X-Title) are OpenRouter-specific: they are how
+    your app is identified on their dashboard and leaderboards. Optional, but
+    without them your traffic shows up as anonymous.
+
+    Model strings carry the vendor prefix - "openai/gpt-4o",
+    "anthropic/claude-sonnet-4", "google/gemini-2.0-flash-exp:free". The ":free"
+    suffix is worth knowing about: several models are free-tier there, which
+    makes OpenRouter a reasonable fallback when the Gemini quota runs out.
+    """
+
+    name = "openrouter"
+    BASE = "https://openrouter.ai/api/v1"
+
+    def available(self) -> bool:
+        return bool(resolve_key("OPENROUTER_API_KEY"))
+
+    def _headers(self):
+        k = resolve_key("OPENROUTER_API_KEY")
+        if not k:
+            raise MissingKey("OPENROUTER_API_KEY not set")
+        return {
+            "Authorization": f"Bearer {k}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "https://api.realflylink.com"),
+            "X-Title": os.getenv("OPENROUTER_SITE_NAME", "Zoqira Terminal"),
+        }
+
+
 REGISTRY: dict[str, Provider] = {
     "anthropic": AnthropicProvider(),
     "gemini": GeminiProvider(),
     "openai": OpenAIProvider(),
     "xai": XAIProvider(),
     "deepseek": DeepSeekProvider(),
+    "openrouter": OpenRouterProvider(),
 }
 
 

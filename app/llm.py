@@ -41,6 +41,9 @@ _RPM = {
     "openai": int(os.getenv("OPENAI_RPM", "50")),
     "deepseek": int(os.getenv("DEEPSEEK_RPM", "50")),
     "xai": int(os.getenv("XAI_RPM", "50")),
+    # Free OpenRouter models are throttled hard (roughly 20/min, and a shared
+    # daily cap). Paid ones are far looser - raise this if you point it at one.
+    "openrouter": int(os.getenv("OPENROUTER_RPM", "15")),
 }
 _last_call: dict[str, float] = {}
 _rate_lock = threading.Lock()
@@ -107,6 +110,15 @@ DEFAULT_MODELS = {
     ("deepseek", "reasoning"): "deepseek-reasoner",
     ("deepseek", "chat"): "deepseek-chat",
     ("deepseek", "review"): "deepseek-reasoner",
+    # OpenRouter models carry a vendor prefix. Overridable per role with
+    # OPENROUTER_MODEL_CHEAP / _REASONING / _CHAT / _REVIEW in .env, since which
+    # model is the best value there changes month to month.
+    ("openrouter", "cheap"): os.getenv("OPENROUTER_MODEL_CHEAP",
+                                       "google/gemini-2.0-flash-exp:free"),
+    ("openrouter", "reasoning"): os.getenv("OPENROUTER_MODEL_REASONING",
+                                           "openai/gpt-4o"),
+    ("openrouter", "chat"): os.getenv("OPENROUTER_MODEL_CHAT", "openai/gpt-4o"),
+    ("openrouter", "review"): os.getenv("OPENROUTER_MODEL_REVIEW", "openai/gpt-4o"),
 }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 from pathlib import Path
 
 import numpy as np
@@ -37,8 +38,15 @@ ACCESS_KEY = os.getenv("ACCESS_KEY", "")
 
 # Endpoints that cost nothing and reveal nothing stay open, so the frontend can
 # tell "wrong key" apart from "server down".
+# The PWA assets must be open too: a service worker that 401s cannot register,
+# which silently kills both the install prompt and push notifications. The
+# manifest and icons are fetched by the browser itself, which never sends our
+# header, so gating them would break installation with no visible error.
 _OPEN_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc",
-               "/docs/oauth2-redirect"}
+               "/docs/oauth2-redirect",
+               "/sw.js", "/manifest.webmanifest",
+               "/icon-192.png", "/icon-512.png",
+               "/icon-maskable-512.png", "/apple-touch-icon.png"}
 
 
 @app.middleware("http")
@@ -49,7 +57,9 @@ async def require_access_key(request: Request, call_next):
 
     supplied = (request.headers.get("x-access-key")
                 or request.query_params.get("key", ""))
-    if supplied != ACCESS_KEY:
+    # compare_digest, not ==, so reply time does not leak how much of the key
+    # was correct.
+    if not secrets.compare_digest(supplied, ACCESS_KEY):
         return JSONResponse(
             {"detail": "Missing or invalid access key. Append ?key=... to the "
                        "frontend URL, or send an X-Access-Key header."},
