@@ -707,6 +707,10 @@ function setTimeframe(tf){
   if(tf === timeframe) return;
   timeframe = tf;
   firstLoad = true; lastClose = null; lastHeavy = 0; drawnKey = null;
+  // Backfilled bars belong to the OLD timeframe. Merging 15m history into a 1h
+  // series produces out-of-order timestamps, which Lightweight Charts rejects
+  // outright - the chart then renders completely empty.
+  historyBars = []; oldestKnown = null; historyExhausted = false;
   try{ localStorage.setItem("tf", tf); }catch{}
   renderTimeframes();
   loadChart(); schedule();
@@ -792,6 +796,15 @@ function initChart(){
     rightPriceScale:{ borderColor:"#232c38", scaleMargins:{top:.1,bottom:.1} },
     timeScale:{
       borderColor:"#232c38", timeVisible:true, secondsVisible:false,
+      // Breathing room to the right of the newest candle. Without it the live
+      // bar sits flush against the price scale and the level badges print on
+      // top of the very candles you are reading. TradingView leaves the same
+      // gap, which is why theirs is easier to read at the hard right edge.
+      rightOffset: 10,
+      // ~8px per bar shows a readable window instead of squeezing 300 bars
+      // into a phone-width chart.
+      barSpacing: 8,
+      minBarSpacing: 0.5,
       // Render each tick in the selected timezone. Day boundaries and
       // higher timeframes get the date; intraday ticks show clock time.
       tickMarkFormatter: (time, tickType) =>
@@ -849,8 +862,20 @@ function initChart(){
   // the oldest candle we hold, go and fetch the previous chunk.
   chart.timeScale().subscribeVisibleLogicalRangeChange(r=>{
     onViewChanged();
+    startTracking();
     if(r && r.from < 8 && !historyMode) loadOlder();
   });
+  // Pointer and wheel both move the view; begin tracking on the gesture itself
+  // rather than waiting for the first range event, which arrives a frame late.
+  const _chartEl = document.getElementById("chart");
+  if(_chartEl){
+    for(const ev of ["pointerdown","touchstart","wheel"]){
+      _chartEl.addEventListener(ev, ()=>{
+        lastViewChange = performance.now();
+        startTracking();
+      }, {passive:true});
+    }
+  }
   // Re-measure only when the box actually changes size, not every frame.
   if(window.ResizeObserver){
     new ResizeObserver(()=>{ measureChart(); scheduleOverlays(); })
@@ -909,7 +934,12 @@ let historyMode = false;       // viewing a past date; live polling paused
 function mergeBars(older, live){
   // Live wins on overlap - it carries the tick-corrected forming candle.
   const seen = new Set(live.map(b => b.time));
-  return older.filter(b => !seen.has(b.time)).concat(live);
+  const out = older.filter(b => !seen.has(b.time)).concat(live);
+  // setData demands strictly ascending unique times, and silently renders
+  // nothing when that is violated. Sorting here means a stale-history bug can
+  // never blank the chart again - worst case you see a few odd bars.
+  out.sort((a, b) => a.time - b.time);
+  return out.filter((b, i) => i === 0 || b.time !== out[i-1].time);
 }
 
 let lastHeavy = 0;
@@ -1597,7 +1627,15 @@ async function loadChart(){
     : {borderVisible:true});
   drawIndicators(d.indicators);
 
-  if(firstLoad){ chart.timeScale().fitContent(); firstLoad = false; }
+  if(firstLoad){
+    // Not fitContent(): that stretches every loaded bar across the width,
+    // overriding rightOffset and cramming 300 candles into a phone screen.
+    // Park at the live edge at the configured bar spacing instead, so the
+    // recent action is readable and there is space on the right.
+    try{ chart.timeScale().scrollToPosition(10, false); }
+    catch{ chart.timeScale().fitContent(); }
+    firstLoad = false;
+  }
   else if(range) chart.timeScale().setVisibleLogicalRange(range);
 
   clearLines();
@@ -2198,6 +2236,29 @@ function onViewChanged(){
   settleTimer = setTimeout(scheduleOverlays, 150);
 }
 
+// While a gesture is in progress, repaint every frame rather than waiting for
+// the chart to emit a range event. Event-driven painting leaves the boxes a
+// frame or more behind the candles, which reads as the zone sitting still and
+// then snapping into place when you let go. The loop stops on its own shortly
+// after the view settles, so it costs nothing at rest.
+let trackRAF = null;
+function startTracking(){
+  if(trackRAF !== null) return;
+  const step = ()=>{
+    paintZonesNow();
+    redrawDrawingsNow();
+    // Keep going through kinetic scroll, then stop.
+    if(performance.now() - lastViewChange < 260){
+      trackRAF = requestAnimationFrame(step);
+    }else{
+      trackRAF = null;
+      paintZonesNow();      // final pass, with labels
+      redrawDrawingsNow();
+    }
+  };
+  trackRAF = requestAnimationFrame(step);
+}
+
 function paintZones(){ scheduleOverlays(); }
 
 function paintZonesNow(){
@@ -2588,9 +2649,11 @@ function pickAxisTags(payload){
   const minGap = narrow ? 26 : 18;      // px a badge needs to stay legible
   const keep = new Set(), taken = [];
   for(const r of rows){
-    // Second-tier levels (premium/discount/swings/zone edges) never get a
-    // badge on a phone - they are the ones that buried the price scale.
-    if(narrow && rank(r.key) === 99) continue;
+    // Only the ladder and the liquidity levels are worth a badge. FVG edges
+    // (bull fvg1 top / ce / bot), EQL and zone boundaries are read from the
+    // boxes on the chart, not the axis - tagging them buried the price scale
+    // on desktop the same way it did on mobile.
+    if(rank(r.key) === 99) continue;
     const y = candles.priceToCoordinate(r.price);
     if(y == null) continue;
     if(taken.some(t => Math.abs(t - y) < minGap)) continue;
