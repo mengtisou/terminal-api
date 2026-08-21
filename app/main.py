@@ -685,11 +685,17 @@ def candles_history(symbol: str, timeframe: str = "15m", limit: int = 300,
 
 @app.get("/candles/{symbol}")
 def candles(symbol: str, timeframe: str = "15m", limit: int = 300,
-            indicators: str = "ema", candle_mode: str = "off"):
+            indicators: str = "ema", candle_mode: str = "off",
+            fresh: bool = False):
     """Full OHLCV for charting, plus the levels to draw on top.
 
     Times are unix seconds, which is what Lightweight Charts expects.
     """
+    if fresh:
+        # Bypass the cache for this one read. The client asks for this right
+        # after a timeframe change, where a TTL-old frame is most visible.
+        from . import cache as _cache
+        _cache.invalidate(symbol, timeframe)
     try:
         df, source = get_candles(symbol, timeframe, limit)
     except DataUnavailable as e:

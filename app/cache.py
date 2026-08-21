@@ -173,3 +173,15 @@ def usage() -> dict:
 def clear() -> None:
     with _lock:
         _cache.clear()
+
+
+def invalidate(symbol: str, timeframe: str) -> bool:
+    """Drop one frame so the next read refetches. Returns True if it existed.
+
+    Used when the user changes timeframe: they are about to stare at a chart
+    they have not seen for a while, and serving them a frame that is up to a
+    full TTL old means the candle they are looking at can be missing a spike
+    that already happened.
+    """
+    with _lock:
+        return _cache.pop((symbol.upper(), timeframe), None) is not None

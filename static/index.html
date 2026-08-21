@@ -231,18 +231,15 @@
   @media (max-width: 900px){
     body{height:100dvh}
 
-    /* Every feature added a button, and wrap:wrap turned the header into three
-       stacked rows that ate the chart. One scrolling row instead: the controls
-       you use constantly stay put, the rest are a swipe away. */
-    header{gap:8px;padding:8px 10px 6px;position:relative;
-           flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;
-           scrollbar-width:none;-webkit-overflow-scrolling:touch}
-    header::-webkit-scrollbar{display:none}
+    /* Wrapping rows, as before - the scrolling single row pushed the timeframe
+       bar off screen entirely. The one rule that matters: the timeframe bar
+       always gets its own full-width row at the end, so no amount of new
+       buttons can ever displace it. */
+    header{gap:7px;padding:8px 10px 6px;position:relative;flex-wrap:wrap}
     header > *{flex:0 0 auto}
-    header button{white-space:nowrap}
-    /* The date picker is the widest control and the least used - shrink it so
-       it stops pushing everything else off screen. */
-    #histDate{max-width:34px;padding:5px 2px}
+    header button{white-space:nowrap;padding:7px 10px;font-size:12.5px}
+    #tfBar{flex:1 0 100%;order:99;margin-top:1px}
+    #tfPop{order:100}
     .sym{font-size:15px}
     .price{font-size:17px}
     header .badge{font-size:9.5px;padding:2px 6px}
@@ -331,11 +328,13 @@
   <div class="tfpop" id="tfPop"></div>
   <button id="auto" class="on">Auto ⏵</button>
   <button id="reload">Refresh</button>
-  <input type="date" id="histDate" title="Jump to a past date"
-         aria-label="Jump to a past date"
-         style="font-size:11.5px;padding:5px 6px;max-width:132px;flex:0 0 auto;
-                background:var(--panel);color:var(--text);
-                border:1px solid var(--line);border-radius:6px">
+  <!-- An empty <input type=date> renders as a wide blank box on Android, which
+       reads as a broken control. Keep the input for the native picker but hide
+       it behind a button that says what it does. -->
+  <button id="histBtn" title="Jump to a past date">📅</button>
+  <input type="date" id="histDate" aria-label="Jump to a past date"
+         style="position:absolute;opacity:0;width:1px;height:1px;
+                pointer-events:none">
   <button id="installBtn" style="display:none" title="Install as an app">⤓ Install</button>
   <button id="bellBtn" title="Enable phone notifications for entry signals">🔔</button>
   <button id="noteBtn" title="Tap to arm, then tap a price on the chart">✎ Note</button>
@@ -764,6 +763,7 @@ function setTimeframe(tf){
   // series produces out-of-order timestamps, which Lightweight Charts rejects
   // outright - the chart then renders completely empty.
   historyBars = []; oldestKnown = null; historyExhausted = false;
+  resetTickBar();
   try{ localStorage.setItem("tf", tf); }catch{}
   renderTimeframes();
   loadChart(); schedule();
@@ -1011,6 +1011,32 @@ function mergeBars(older, live){
 
 let lastHeavy = 0;
 let hasLiveTick = false;   // true once a real tick feed is confirmed
+// Running high/low of the bar currently forming, kept from the tick feed and
+// therefore independent of which timeframe is on screen.
+let tickBar = {time: null, high: -Infinity, low: Infinity};
+
+function tfSeconds(tf){
+  const m = /^(\d+)\s*(m|h|d)$/.exec(tf || "");
+  if(!m) return 900;
+  const n = +m[1];
+  return n * (m[2] === "m" ? 60 : m[2] === "h" ? 3600 : 86400);
+}
+
+function noteTick(price){
+  const span = tfSeconds(timeframe);
+  const barStart = Math.floor(shift(Math.floor(Date.now() / 1000)) / span) * span;
+  if(tickBar.time !== barStart){
+    tickBar = {time: barStart, high: price, low: price};
+  }else{
+    tickBar.high = Math.max(tickBar.high, price);
+    tickBar.low  = Math.min(tickBar.low,  price);
+  }
+}
+
+// Reset when the timeframe changes: bar boundaries move, so extremes gathered
+// against the old span do not describe the new bar.
+function resetTickBar(){ tickBar = {time: null, high: -Infinity, low: Infinity}; }
+
 let lastBar = null;        // the forming candle, updated by the tick feed
 
 // Fast price update — real tick from OANDA/MT5, plus a live update of the
@@ -1035,6 +1061,14 @@ async function loadPrice(){
       }
       if(d.bid && d.ask) priceEl.title = `bid ${d.bid} / ask ${d.ask} · spread ${d.spread}`;
     }
+
+    // Ticks are timeframe-independent, so record the extremes of the current
+    // bar ourselves. Without this, switching 5m -> 15m throws away lastBar
+    // (different bar time) and the forming 15m candle falls back to whatever
+    // the server had cached - so a spike that already happened inside that bar
+    // simply vanishes until the cache refreshes. That is why 5m showed a high
+    // of 4539 while the 15m bar containing it showed 4530.
+    if(d.live && typeof d.price === "number") noteTick(d.price);
 
     // Push the tick into the last candle so the chart moves in real time.
     // update() only touches the final bar - far cheaper than setData() and
@@ -1660,8 +1694,12 @@ function initDrawing(){
 async function loadChart(){
   let d;
   try{
+    // firstLoad is set on boot, symbol change and timeframe change - exactly
+    // the moments a cached frame is most likely to be visibly behind. Ask for
+    // a fresh one then, and use the cache for the routine 15s polls.
     const r = await fetch(`${API}/candles/${symbol}?timeframe=${timeframe}&limit=300`
-                          + `&indicators=${indOn.join(",")}&candle_mode=${candleMode}`);
+                          + `&indicators=${indOn.join(",")}&candle_mode=${candleMode}`
+                          + (firstLoad ? "&fresh=1" : ""));
     if(!r.ok) throw new Error("HTTP "+r.status);
     d = await r.json();
   }catch(e){
@@ -1678,16 +1716,22 @@ async function loadChart(){
   // The server's cached last candle can be a few seconds behind the tick feed.
   // Overwriting the live candle with it makes the bar visibly jump backwards,
   // then correct itself on the next tick. So carry the live values forward.
-  if(hasLiveTick && lastBar && sb.length){
+  if(hasLiveTick && sb.length){
     const serverLast = sb[sb.length - 1];
-    if(serverLast.time === lastBar.time){
-      sb[sb.length - 1] = {
-        ...serverLast,
-        high:  Math.max(serverLast.high, lastBar.high),
-        low:   Math.min(serverLast.low,  lastBar.low),
-        close: lastBar.close,        // the tick price is the freshest truth
-      };
+    // Two sources of truth beyond the server frame: the bar we have been
+    // updating (lost on a timeframe switch) and the tick extremes (which
+    // survive one, because they are recomputed against the new bar span).
+    let hi = serverLast.high, lo = serverLast.low, cl = serverLast.close;
+    if(lastBar && serverLast.time === lastBar.time){
+      hi = Math.max(hi, lastBar.high);
+      lo = Math.min(lo, lastBar.low);
+      cl = lastBar.close;            // the tick price is the freshest truth
     }
+    if(tickBar.time === serverLast.time){
+      hi = Math.max(hi, tickBar.high);
+      lo = Math.min(lo, tickBar.low);
+    }
+    sb[sb.length - 1] = {...serverLast, high: hi, low: lo, close: cl};
   }
 
   liveBars = sb;
@@ -3256,6 +3300,13 @@ if(_noteBtn) _noteBtn.onclick = ()=>{ noteMode = !noteMode; updateNoteBtn(); };
 document.getElementById("reload").onclick = ()=>{ loadChart(); schedule(); };
 const _histDate = document.getElementById("histDate");
 if(_histDate) _histDate.onchange = ()=> jumpToDate(_histDate.value);
+const _histBtn = document.getElementById("histBtn");
+if(_histBtn) _histBtn.onclick = ()=>{
+  if(!_histDate) return;
+  // showPicker is the reliable way to open the native calendar from a button;
+  // click() is the fallback for browsers that do not support it yet.
+  try{ _histDate.showPicker(); }catch{ _histDate.click(); }
+};
 const _histLive = document.getElementById("histLive");
 if(_histLive) _histLive.onclick = ()=>{ if(_histDate) _histDate.value = ""; backToLive(); };
 
@@ -3272,6 +3323,7 @@ document.getElementById("symSel").onchange = e=>{
   // Backfilled bars and notes belong to the previous instrument. Carrying
   // either across would draw one symbol's prices onto another's chart.
   historyBars = []; oldestKnown = null; historyExhausted = false;
+  resetTickBar();
   loadNotes(); drawNotes(); updateNoteBtn();
   loadDrawings(); redrawDrawings();
   loadChart(); schedule();
