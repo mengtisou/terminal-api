@@ -571,6 +571,7 @@
           <button id="refreshNews" style="flex:1;font-size:12px">Refresh feed</button>
           <button id="pullNews" style="flex:1;font-size:12px">Pull latest news</button>
           <button id="clearNews" style="flex:0 0 auto;font-size:12px" title="Clear cached headlines">✕</button>
+          <button id="translateNews" style="flex:0 0 auto;font-size:12px" title="Translate headline &amp; takeaway to Khmer">EN→ខ្មែរ</button>
         </div>
         <div class="tfbar" id="impBar" style="width:100%">
           <button data-imp="all" class="on" style="flex:1">All</button>
@@ -2314,6 +2315,50 @@ function renderNews(d){
     </div>`;
   }).join("");
   out.innerHTML = html;
+  // Keep the Khmer view sticky across refreshes/symbol changes - re-translate
+  // the newly rendered batch instead of snapping back to English. Cached
+  // strings resolve instantly; only genuinely new headlines hit the API.
+  if(newsLangKm) applyNewsLanguage();
+}
+
+// ---------- Khmer translation ----------
+// Only the headline and the AI "takeaway" line are ever translated. Source,
+// timestamp, the impact badge and the per-asset tags (e.g. "gold bullish")
+// are structured labels, not prose, so they always stay in English - flipping
+// languages must never change what a tag says, only the words around it.
+let newsLangKm = false;
+const _kmCache = {}; // english text -> khmer text, kept for the session so re-renders don't re-fetch
+
+async function translateToKhmer(text){
+  if(!text || !text.trim()) return text;
+  if(_kmCache[text]) return _kmCache[text];
+  try{
+    const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|km`);
+    const j = await r.json();
+    const out = j?.responseData?.translatedText;
+    if(out && !/MYMEMORY WARNING/i.test(out)){
+      _kmCache[text] = out;
+      return out;
+    }
+  }catch{}
+  return text; // translation unavailable - leave the English text in place
+}
+
+async function applyNewsLanguage(){
+  const out = document.getElementById("newsOut");
+  if(!out) return;
+  const nodes = [];
+  out.querySelectorAll(".news-title").forEach(el=> nodes.push(el.querySelector("a") || el));
+  out.querySelectorAll(".take span:last-child").forEach(el=> nodes.push(el));
+
+  if(newsLangKm){
+    await Promise.all(nodes.map(async el=>{
+      if(!el.dataset.enOriginal) el.dataset.enOriginal = el.textContent;
+      el.textContent = await translateToKhmer(el.dataset.enOriginal);
+    }));
+  }else{
+    nodes.forEach(el=>{ if(el.dataset.enOriginal) el.textContent = el.dataset.enOriginal; });
+  }
 }
 
 async function pullNews(){
@@ -3430,6 +3475,21 @@ const _pullBtn = document.getElementById("pullNews");
 const _refreshBtn = document.getElementById("refreshNews");
 if(_pullBtn) _pullBtn.onclick = pullNews;
 if(_refreshBtn) _refreshBtn.onclick = loadNews;
+
+const _translateNewsBtn = document.getElementById("translateNews");
+if(_translateNewsBtn) _translateNewsBtn.onclick = async ()=>{
+  newsLangKm = !newsLangKm;
+  _translateNewsBtn.classList.toggle("on", newsLangKm);
+  _translateNewsBtn.disabled = true;
+  _translateNewsBtn.textContent = newsLangKm ? "Translating…" : "EN→ខ្មែរ";
+  try{ await applyNewsLanguage(); }
+  finally{
+    _translateNewsBtn.disabled = false;
+    if(_translateNewsBtn.textContent === "Translating…"){
+      _translateNewsBtn.textContent = newsLangKm ? "Show English" : "EN→ខ្មែរ";
+    }
+  }
+};
 
 // --- news filter bar wiring ---
 document.querySelectorAll("#impBar [data-imp]").forEach(b=>{
